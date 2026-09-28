@@ -172,6 +172,26 @@
   .done .row2 { display: flex; gap: 12px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
   .done .row2 button { padding: 10px 16px; border-radius: 6px; border: 1px solid var(--lake); background: var(--card); color: var(--lake); font-weight: 600; }
 
+  /* ---------- Read view ---------- */
+  #readingView { max-width: 720px; margin: 0 auto; }
+  .rd-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .rd-head h2 { font: 600 22px/1.2 var(--serif); margin: 0; }
+  .rd-passage { font: 400 19px/1.65 var(--serif); }
+  .rd-passage p { margin: 0 0 14px; }
+  .rd-passage p:last-child { margin-bottom: 0; }
+  .rd-word { cursor: pointer; color: var(--lake); text-decoration: underline dotted; text-underline-offset: 3px; border-radius: 3px; }
+  .rd-word:hover, .rd-word:focus-visible { background: color-mix(in srgb, var(--lake) 14%, transparent); }
+  .rd-caption { color: var(--muted); font-size: 14px; margin: 14px 0 0; }
+  .rd-skeleton-line { height: 18px; border-radius: 4px; margin-bottom: 10px; background: var(--line); }
+  .rd-skeleton-line:last-child { width: 60%; margin-bottom: 0; }
+  @media (prefers-reduced-motion: no-preference) {
+    .rd-skeleton-line {
+      background: linear-gradient(90deg, var(--line), var(--card), var(--line));
+      background-size: 200% 100%; animation: rd-shimmer 1.4s ease-in-out infinite;
+    }
+  }
+  @keyframes rd-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
   .forms { margin-top: 16px; }
   .forms h3 { font: 600 15px var(--sans); margin: 0 0 8px; color: var(--muted); text-transform: none; }
   .forms table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -240,6 +260,7 @@
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" id="tabWords" aria-selected="true" data-view="words">Words</button>
     <button class="tab" role="tab" id="tabPractice" aria-selected="false" data-view="practice">Practice</button>
+    <button class="tab" role="tab" id="tabReading" aria-selected="false" data-view="reading">Read</button>
   </div>
 
   <!-- ===================== WORDS ===================== -->
@@ -337,6 +358,15 @@
       <button type="button" id="gotBtn" class="got">I know it</button>
     </div>
     <p class="keys" id="keysHint" hidden>Space flips the card. 1 = still learning, 2 = I know it.</p>
+  </div>
+
+  <!-- ===================== READ ===================== -->
+  <div id="readingView" hidden>
+    <div class="rd-head">
+      <h2>Today's reading</h2>
+      <button class="link" id="readingRegenBtn" type="button" hidden>Generate a new passage</button>
+    </div>
+    <div id="readingBody" aria-live="polite"></div>
   </div>
 
   <button id="addFab" class="fab" type="button" hidden aria-label="Add a word">+</button>
@@ -888,6 +918,119 @@ function nextReviewState(state, knew) {
   return s;
 }
 
+/* ================= READ VIEW ================= */
+// A daily AI-generated passage that naturally uses today's due words, so
+// they're seen several times in context instead of in isolation. Generated
+// at most once per calendar day (cached in localStorage) — regeneration is
+// opt-in via the "Generate a new passage" button.
+const READING_MIN_WORDS = 4;
+const READING_MAX_WORDS = 10;
+
+function loadReadingCache() {
+  try { return JSON.parse(store.get('ordbok_reading', 'null')); } catch (e) { return null; }
+}
+function saveReadingCache(entry) { store.set('ordbok_reading', JSON.stringify(entry)); }
+
+// Tokenizes the (already-esc()'d) Swedish text and wraps any word run that
+// matches one of `rows`' headword, saved Grammar Forms, or Seen As entries —
+// exact match first, then a stemmed fallback via stemWord — in a clickable
+// span. Mirrors the three-way check clientMatches (line ~428) already does,
+// since the model will naturally inflect words rather than using bare
+// dictionary forms. Returns the built HTML plus which rows actually matched.
+function buildReadingHtml(text, rows) {
+  const exact = new Map(), stems = new Map();
+  rows.forEach(r => {
+    const forms = [r[W]].concat(parseForms(r[GF]).map(f => f.sv)).concat(parseSeenAs(r[SEEN]));
+    forms.forEach(f => {
+      const lw = (f || '').toLowerCase();
+      if (!lw) return;
+      exact.set(lw, r);
+      const st = stemWord(lw);
+      if (st.length >= 4) stems.set(st, r);
+    });
+  });
+  const matched = new Set();
+  const wordRe = /[a-zA-ZåäöÅÄÖ]+/g;
+  const highlightPara = para => esc(para).replace(wordRe, tok => {
+    const lw = tok.toLowerCase();
+    const row = exact.get(lw) || stems.get(stemWord(lw));
+    if (!row) return tok;
+    matched.add(row[W]);
+    return '<span class="rd-word" data-word="' + esc(row[W]) + '" tabindex="0" role="link">' + tok + '</span>';
+  });
+  const paragraphs = (text || '').trim().split(/\n{2,}/).filter(Boolean);
+  return { html: paragraphs.map(p => '<p>' + highlightPara(p) + '</p>').join(''), matched: Array.from(matched) };
+}
+
+function renderReadingEmpty(kind, n) {
+  $('readingRegenBtn').hidden = true;
+  const msg = kind === 'demo'
+    ? 'Connect a Google Sheet to unlock AI reading passages — see Settings.'
+    : n === 0
+    ? 'Nothing due for review today — nice work! Come back tomorrow, or review more in Practice.'
+    : 'You have ' + n + ' word' + (n === 1 ? '' : 's') + ' due today — at least ' + READING_MIN_WORDS + ' are needed for a reading passage. Review more in Practice, or add new words.';
+  $('readingBody').innerHTML = '<div class="empty">' + esc(msg) + '</div>';
+}
+function renderReadingLoading() {
+  $('readingRegenBtn').hidden = true;
+  $('readingBody').innerHTML = '<div class="panel rd-passage">' +
+    '<div class="rd-skeleton-line"></div><div class="rd-skeleton-line"></div>' +
+    '<div class="rd-skeleton-line"></div><div class="rd-skeleton-line"></div>' +
+    '</div>';
+}
+function renderReadingError(message) {
+  $('readingRegenBtn').hidden = false;
+  $('readingBody').innerHTML = '<div class="empty">Could not generate a reading passage: ' + esc(message) + '</div>';
+}
+async function renderReadingPassage(entry) {
+  $('readingRegenBtn').hidden = false;
+  let allRows = [];
+  try { allRows = await fetchAllRows(false); } catch (e) { /* fall back to headword-only rows below */ }
+  // Words edited/deleted since this passage was generated still get
+  // highlighted using a minimal stand-in row (just the bare headword).
+  const rows = entry.words.map(w =>
+    allRows.find(r => r[W].toLowerCase() === w.toLowerCase()) || { [W]: w, [GF]: '[]', [SEEN]: '[]' });
+  const { html, matched } = buildReadingHtml(entry.text, rows);
+  $('readingBody').innerHTML =
+    '<div class="panel rd-passage" lang="sv">' + html + '</div>' +
+    '<p class="rd-caption">' + matched.length + ' of your ' + entry.words.length + ' due words appear above — tap one to open it.</p>';
+}
+
+async function startReading(force) {
+  if (!apiUrl) { renderReadingEmpty('demo'); return; }
+  const cached = !force && loadReadingCache();
+  if (cached && cached.date === todayStr() && cached.apiUrl === apiUrl) {
+    await renderReadingPassage(cached);
+    return;
+  }
+  let dueRows;
+  try {
+    const rows = await apiSearch('');
+    dueRows = rows.filter(r => reviewState(r).due <= todayStr());
+  } catch (e) { renderReadingError(e.message); return; }
+  if (dueRows.length < READING_MIN_WORDS) { renderReadingEmpty('few', dueRows.length); return; }
+  const picked = dueRows.slice()
+    .sort((a, b) => reviewState(a).due.localeCompare(reviewState(b).due))
+    .slice(0, READING_MAX_WORDS);
+  const words = picked.map(r => r[W]);
+  renderReadingLoading();
+  try {
+    const data = await post({ action: 'generateReading', words });
+    const entry = { date: todayStr(), apiUrl, words, text: data.text || '', wordsUsed: Array.isArray(data.wordsUsed) ? data.wordsUsed : [] };
+    saveReadingCache(entry);
+    await renderReadingPassage(entry);
+  } catch (e) { renderReadingError(e.message); }
+}
+
+// Opens a tapped word's entry on the Words tab, reusing the exact
+// flashWord/openSet highlight mechanism save() and autofill() already use.
+function jumpToWord(word) {
+  flashWord = word.toLowerCase();
+  openSet.add(flashWord);
+  $('q').value = word;
+  setView('words');
+}
+
 /* ================= PRACTICE VIEW ================= */
 const P = { deck: [], picks: [], i: 0, flipped: false, dir: 'sv2en', mode: 'todo', kind: 'flash', got: 0, missed: [], total: 0 };
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
@@ -1029,17 +1172,32 @@ async function answer(knew) {
 
 /* ================= VIEW SWITCHING ================= */
 function setView(v) {
-  const practice = v === 'practice';
-  $('wordsView').hidden = practice; $('practiceView').hidden = !practice;
-  $('tabWords').setAttribute('aria-selected', String(!practice));
+  const practice = v === 'practice', reading = v === 'reading';
+  $('wordsView').hidden = v !== 'words';
+  $('practiceView').hidden = !practice;
+  $('readingView').hidden = !reading;
+  $('tabWords').setAttribute('aria-selected', String(v === 'words'));
   $('tabPractice').setAttribute('aria-selected', String(practice));
-  $('addFab').hidden = practice;
-  if (practice) startPractice(); else runSearch();
+  $('tabReading').setAttribute('aria-selected', String(reading));
+  $('addFab').hidden = v !== 'words';
+  if (practice) startPractice();
+  else if (reading) startReading();
+  else runSearch();
+}
+// Re-runs whichever view is currently visible, without touching which tab is
+// selected — used after a setting change (e.g. connecting a Google Sheet)
+// made from a non-Words tab, so that tab reflects the new apiUrl right away
+// instead of staying stuck on its stale (e.g. "connect a sheet") state.
+function refreshCurrentView() {
+  if (!$('practiceView').hidden) startPractice();
+  else if (!$('readingView').hidden) startReading();
+  else runSearch();
 }
 
 /* ================= EVENTS ================= */
 $('tabWords').addEventListener('click', () => setView('words'));
 $('tabPractice').addEventListener('click', () => setView('practice'));
+$('tabReading').addEventListener('click', () => setView('reading'));
 
 $('fillBtn').addEventListener('click', () => autofill());
 $('manualBtn').addEventListener('click', () => { currentForms = []; currentSeenAs = []; editingWord = null; renderFormsPreview(); showFields(true); setMsg(''); $('f_pron').focus(); });
@@ -1105,6 +1263,17 @@ $('results').addEventListener('click', async e => {
   }
 });
 
+$('readingRegenBtn').addEventListener('click', () => startReading(true));
+$('readingBody').addEventListener('click', e => {
+  const span = e.target.closest('.rd-word');
+  if (span) jumpToWord(span.dataset.word);
+});
+$('readingBody').addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('rd-word')) {
+    e.preventDefault(); jumpToWord(e.target.dataset.word);
+  }
+});
+
 $('deckMode').addEventListener('change', () => startPractice());
 $('deckDir').addEventListener('change', () => startPractice());
 $('deckKind').addEventListener('change', () => startPractice());
@@ -1140,7 +1309,7 @@ $('cancelSettings').addEventListener('click', () => $('settings').close());
 $('saveSettings').addEventListener('click', () => {
   apiUrl = $('apiUrl').value.trim(); store.set('ordbok_api_url', apiUrl);
   invalidateRowsCache();
-  $('settings').close(); renderModePill(); runSearch();
+  $('settings').close(); renderModePill(); refreshCurrentView();
 });
 $('openPinFromSettings').addEventListener('click', async () => {
   const entered = await askPin();

@@ -50,6 +50,11 @@ const POS_OPTIONS = ['noun (en)', 'noun (ett)', 'verb', 'adjective', 'adverb', '
 // since latency scales mostly with how many tokens the model has to generate.
 const AUTOFILL_MAX_TOKENS = 450;
 
+// Same rationale as AUTOFILL_MAX_TOKENS, sized for a 100-150 word Swedish
+// passage plus the wordsUsed array and JSON overhead.
+const READING_MAX_TOKENS = 700;
+const READING_WORD_COUNT = { min: 100, max: 150 };
+
 // How long a search result set is cached (seconds). Search re-reads the whole
 // sheet otherwise, and a Sheets API read is the slowest part of a search by
 // far, so this is the main lever for making search feel instant. Any
@@ -147,6 +152,75 @@ function autofill_(word, sourceSentence) {
   }
   delete fields.Forms;
   return { ok: true, fields: fields };
+}
+
+/**
+ * Writes a short (100-150 word) Swedish reading passage that naturally uses
+ * as many of `words` as it can, for the "Today's reading" feature — a pure
+ * LLM call, same shape as autofill_ above, with no Sheet read or write.
+ */
+function generateReading_(words) {
+  const propName = PROVIDER === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY';
+  const key = PropertiesService.getScriptProperties().getProperty(propName);
+  if (!key) return { ok: false, error: propName + ' is not set in Script properties.' };
+  const list = (Array.isArray(words) ? words : []).map(w => String(w || '').trim()).filter(Boolean);
+  if (list.length < 4) return { ok: false, error: 'Need at least 4 words to generate a reading passage.' };
+
+  const system =
+    'You are a Swedish language tutor writing short graded-reader passages for an English-speaking adult ' +
+    'learner at A2-B1 level. Write ONE short passage in Swedish, ' + READING_WORD_COUNT.min + '-' + READING_WORD_COUNT.max +
+    ' words long, that naturally uses as many as possible of a given list of Swedish words the learner is ' +
+    'currently reviewing. You may inflect/conjugate the given words as needed to fit the sentence (e.g. "springa" ' +
+    'may appear as "sprang" or "springer") — natural grammar always wins over using a word\'s exact dictionary form. ' +
+    'It is fine to skip a word if it cannot be worked in naturally. Keep the vocabulary and sentence structure ' +
+    'otherwise simple and mostly-familiar (short sentences, everyday topics, present or simple past tense) — the ' +
+    'point is comfortable reading practice, not a challenge. Return ONLY a JSON object with exactly these keys: ' +
+    '"text": the Swedish passage as a single string (use "\\n\\n" between paragraphs if you use more than one); ' +
+    '"wordsUsed": a JSON array of the words from the given list you actually managed to include.';
+
+  const userMessage = 'Words to review:\n' + list.join(', ');
+
+  let fields;
+  if (PROVIDER === 'gemini') {
+    const res = UrlFetchApp.fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': key },
+      muteHttpExceptions: true,
+      payload: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+        generationConfig: { temperature: 0.7, responseMimeType: 'application/json', maxOutputTokens: READING_MAX_TOKENS },
+      }),
+    });
+    const body = JSON.parse(res.getContentText());
+    if (res.getResponseCode() !== 200) {
+      return { ok: false, error: 'Gemini error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
+    }
+    fields = JSON.parse(body.candidates[0].content.parts[0].text);
+  } else {
+    const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + key },
+      muteHttpExceptions: true,
+      payload: JSON.stringify({
+        model: OPENAI_MODEL,
+        // Same gpt-5.x constraint as autofill_ above: no `temperature`, and
+        // `max_completion_tokens` rather than the old `max_tokens`.
+        max_completion_tokens: READING_MAX_TOKENS,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: system }, { role: 'user', content: userMessage }],
+      }),
+    });
+    const body = JSON.parse(res.getContentText());
+    if (res.getResponseCode() !== 200) {
+      return { ok: false, error: 'OpenAI error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
+    }
+    fields = JSON.parse(body.choices[0].message.content);
+  }
+  return { ok: true, text: String(fields.text || ''), wordsUsed: Array.isArray(fields.wordsUsed) ? fields.wordsUsed : [] };
 }
 
 /**
@@ -313,6 +387,7 @@ function doGet(e) {
 
 // POST (JSON sent as text/plain). Actions:
 //   { action: 'autofill', word, sourceSentence } -> LLM fills the other fields + Grammar Forms
+//   { action: 'generateReading', words }         -> LLM writes a short passage using the given due words
 //   { action: 'setLearned', word, learned }      -> tick / untick the Learned column
 //   { action: 'updateReview', word, reviewState } -> overwrite the Review State column (spaced repetition)
 //   { 'Swedish Word': ..., ... }                 -> add a word, or update it if it exists
@@ -331,6 +406,9 @@ function doPost(e) {
 
     if (data.action === 'autofill') {
       return json_(autofill_(String(data.word || '').trim(), String(data.sourceSentence || '').trim()));
+    }
+    if (data.action === 'generateReading') {
+      return json_(generateReading_(Array.isArray(data.words) ? data.words : []));
     }
 
     lock.waitLock(10000);
