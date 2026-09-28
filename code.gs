@@ -32,6 +32,10 @@ const HEADERS = [
   'Example Sentence (English)',
   'Learned',
   'Grammar Forms',      // JSON: [{label, sv, example_sv, example_en}, ...]
+  'Seen As',            // JSON: ["gick", ...] — inflected forms the user actually typed/looked up
+  'Review State',       // JSON: {ef, interval, reps, due, last, lapses} — SM-2-lite spaced-repetition state
+  'Tags',               // comma-separated, e.g. "food, home" — meant to be hand-edited in the Sheet too
+  'Source',             // free text: where/how the word was encountered (also grounds the AI example sentence)
 ];
 
 // ---- Auto-fill settings: check these two match what you use ----
@@ -52,7 +56,7 @@ const AUTOFILL_MAX_TOKENS = 450;
 // save/edit/learn immediately clears the cache so you never see stale data.
 const SEARCH_CACHE_SECONDS = 50;
 
-function autofill_(word) {
+function autofill_(word, sourceSentence) {
   const propName = PROVIDER === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY';
   const key = PropertiesService.getScriptProperties().getProperty(propName);
   if (!key) return { ok: false, error: propName + ' is not set in Script properties.' };
@@ -62,10 +66,19 @@ function autofill_(word) {
     'You are a Swedish language tutor helping an English-speaking adult learner build a vocabulary list. ' +
     'Given a Swedish word or short phrase, return ONLY a JSON object with exactly these keys. ' +
     'Be concise everywhere — this is a quick reference card, not an essay. Every "example_sv"/"example_en" ' +
-    'and both top-level example sentences must be SHORT, natural, everyday sentences of 8 words or fewer.\n' +
+    'and both top-level example sentences must be SHORT, natural, everyday sentences of 8 words or fewer. ' +
+    'Use the kind of phrasing a native speaker would actually say — prefer common idiomatic expressions over ' +
+    'literal-but-unnatural constructions (e.g. say "helt slut" or "jättetrött", not a stiff literal "helt trött", ' +
+    'for "very tired"). If in doubt, choose the simpler, more common phrasing an SFI (Swedish for immigrants) course ' +
+    'would teach at A2-B1 level.\n' +
+    '"Dictionary Form": the word\'s standard dictionary/lemma form, lowercase — infinitive for verbs, singular ' +
+    'indefinite for nouns (no article), base/positive form for adjectives; if the input is already the dictionary ' +
+    'form, return it unchanged (lowercased); if it\'s inflected (e.g. "gick", "bilar", "snabbare"), return its ' +
+    'lemma (e.g. "gå", "bil", "snabb");\n' +
     '"Pronunciation Guide": an English-friendly respelling in lowercase, syllables separated by hyphens, with ONLY the stressed syllable in CAPS, e.g. "hem-TREV-lig";\n' +
     '"Part of Speech": one of ' + JSON.stringify(POS_OPTIONS) + ' (use "noun (en)" or "noun (ett)" to show the gender; pick the most common use);\n' +
-    '"English Meaning": a short translation, 6 words or fewer (most common sense; a second sense only if truly common, comma-separated);\n' +
+    '"English Meaning": a short translation, 6 words or fewer, ALWAYS lowercase (except proper nouns), and for ' +
+    'verbs do NOT prefix with "to" (write "take", not "to take") (most common sense; a second sense only if truly common, comma-separated);\n' +
     '"Example Sentence (Swedish)": one short everyday sentence (max 8 words) using the word exactly as given (A2-B1 level);\n' +
     '"Example Sentence (English)": its English translation;\n' +
     '"Forms": an array of the word\'s key grammatical forms, each item shaped ' +
@@ -79,6 +92,11 @@ function autofill_(word) {
     'The "sv" field of each form item must be ONLY the inflected word itself (no article, no extra words) so it can be matched against later, e.g. "bilar" not "en bilar". ' +
     'If the input is not a real Swedish word, still return the JSON with "English Meaning" set to "Not recognised as Swedish" and "Forms" as [].';
 
+  const userMessage = sourceSentence
+    ? word + '\n\nThe learner found this word in the following sentence — if natural, base "Example Sentence (Swedish)" ' +
+      'closely on it (adapt only as needed to fit the length/word rules), and still give its English translation as usual:\n"' + sourceSentence + '"'
+    : word;
+
   let fields;
   if (PROVIDER === 'gemini') {
     const res = UrlFetchApp.fetch(
@@ -89,7 +107,7 @@ function autofill_(word) {
       muteHttpExceptions: true,
       payload: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts: [{ text: word }] }],
+        contents: [{ role: 'user', parts: [{ text: userMessage }] }],
         generationConfig: { temperature: 0.3, responseMimeType: 'application/json', maxOutputTokens: AUTOFILL_MAX_TOKENS },
       }),
     });
@@ -112,7 +130,7 @@ function autofill_(word) {
         // omitted here rather than set to 0.3 as it used to be.
         max_completion_tokens: AUTOFILL_MAX_TOKENS,
         response_format: { type: 'json_object' },
-        messages: [{ role: 'system', content: system }, { role: 'user', content: word }],
+        messages: [{ role: 'system', content: system }, { role: 'user', content: userMessage }],
       }),
     });
     const body = JSON.parse(res.getContentText());
@@ -215,6 +233,12 @@ function norm_(s) {
   return String(s == null ? '' : s).toLowerCase().trim();
 }
 
+// Safe JSON-array parse, used for the "Seen As" cell — never throws, always
+// returns an array (empty on missing/malformed input).
+function safeParseArr_(s) {
+  try { const a = JSON.parse(s || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+
 // Best-effort Swedish suffix stripper, used only as a fallback for older rows
 // that have no "Grammar Forms" saved yet. Longer/more specific suffixes are
 // tried first. Deliberately has NO single-letter suffixes (no bare "n", "t",
@@ -253,6 +277,15 @@ function rowMatchesQuery_(row, q, qStem) {
       if (f && (f === q || f.indexOf(q) !== -1)) return true;
     }
   } catch (e) { /* malformed Grammar Forms — ignore */ }
+  // "Seen As": the inflected forms the user actually typed before the word got
+  // saved under its dictionary form, e.g. searching "gick" finds a row saved as "gå".
+  try {
+    const seen = JSON.parse(row['Seen As'] || '[]');
+    for (let i = 0; i < seen.length; i++) {
+      const s = norm_(seen[i]);
+      if (s && (s === q || s.indexOf(q) !== -1)) return true;
+    }
+  } catch (e) { /* malformed Seen As — ignore */ }
   if (qStem && qStem.length >= 4 && stem_(word) === qStem) return true;
   return false;
 }
@@ -279,9 +312,11 @@ function doGet(e) {
 }
 
 // POST (JSON sent as text/plain). Actions:
-//   { action: 'autofill', word }            -> LLM fills the other fields + Grammar Forms
-//   { action: 'setLearned', word, learned } -> tick / untick the Learned column
-//   { 'Swedish Word': ..., ... }            -> add a word, or update it if it exists
+//   { action: 'autofill', word, sourceSentence } -> LLM fills the other fields + Grammar Forms
+//   { action: 'setLearned', word, learned }      -> tick / untick the Learned column
+//   { action: 'updateReview', word, reviewState } -> overwrite the Review State column (spaced repetition)
+//   { 'Swedish Word': ..., ... }                 -> add a word, or update it if it exists
+//                                                    ('Swedish Word' is lowercased on write; 'Seen As' is merged, not overwritten)
 function doPost(e) {
   const lock = LockService.getScriptLock();
   try {
@@ -295,7 +330,7 @@ function doPost(e) {
     }
 
     if (data.action === 'autofill') {
-      return json_(autofill_(String(data.word || '').trim()));
+      return json_(autofill_(String(data.word || '').trim(), String(data.sourceSentence || '').trim()));
     }
 
     lock.waitLock(10000);
@@ -306,6 +341,14 @@ function doPost(e) {
       const row = findRow_(sh, data.word);
       if (row < 0) return json_({ ok: false, error: 'Word not found in the sheet' });
       sh.getRange(row, map['Learned']).setValue(data.learned ? 'Yes' : '');
+      invalidateCache_();
+      return json_({ ok: true });
+    }
+
+    if (data.action === 'updateReview') {
+      const row = findRow_(sh, data.word);
+      if (row < 0) return json_({ ok: false, error: 'Word not found in the sheet' });
+      sh.getRange(row, map['Review State']).setValue(String(data.reviewState || '{}'));
       invalidateCache_();
       return json_({ ok: true });
     }
@@ -324,6 +367,15 @@ function doPost(e) {
       if (h === 'Learned') {
         if (data.Learned !== undefined) rowValues[c - 1] = String(data.Learned);
         // else: keep whatever was already there (existing value, or '' for a new row)
+      } else if (h === 'Swedish Word' && data[h] !== undefined) {
+        // Lowercased on write so the stored headword is always the canonical
+        // dictionary-form key (matching stays case-insensitive throughout).
+        rowValues[c - 1] = String(data[h]).trim().toLowerCase();
+      } else if (h === 'Seen As' && data[h] !== undefined) {
+        // Merge, don't overwrite — accumulates every inflected form the word
+        // has ever been looked up as, e.g. ["gick"] then later ["gått"].
+        const merged = Array.from(new Set(safeParseArr_(rowValues[c - 1]).concat(safeParseArr_(data[h]))));
+        rowValues[c - 1] = JSON.stringify(merged);
       } else if (data[h] !== undefined) {
         rowValues[c - 1] = String(data[h]).trim();
       }

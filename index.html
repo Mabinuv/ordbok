@@ -20,12 +20,14 @@
     --serif: "Newsreader", Georgia, "Times New Roman", serif;
     --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
     --c-noun: #1f5a7a; --c-verb: #a4283f; --c-adj: #9c6b12; --c-other: #5b7080;
+    --c-en: #1f5a7a; --c-ett: #a4283f;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0f1b23; --card: #16262f; --ink: #e4edf2; --muted: #93a8b6;
       --line: #2b414e; --lake: #7cc0e3; --berry: #ff8fa3; --ok: #7fd1a0; --on-lake: #0f1b23;
       --c-noun: #7cc0e3; --c-verb: #ff8fa3; --c-adj: #e0b872; --c-other: #93a8b6;
+      --c-en: #7cc0e3; --c-ett: #ff8fa3;
     }
   }
   * { box-sizing: border-box; }
@@ -123,6 +125,12 @@
   .entry .ex { margin: 0; padding-top: 10px; border-top: 1px dashed var(--line); }
   .entry .ex .s { font: 400 18px/1.4 var(--serif); }
   .entry .ex .e { color: var(--muted); font-size: 15px; }
+  .gender { font-size: 12px; font-weight: 700; border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; white-space: nowrap; }
+  .gender[data-g="en"] { color: var(--c-en); }
+  .gender[data-g="ett"] { color: var(--c-ett); }
+  .entry .seen { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  .entry .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+  .tag-chip { font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--muted); }
   .entry .tools { margin-top: 10px; display: flex; gap: 16px; font-size: 13px; flex-wrap: wrap; }
   .tools .link, .pcard .link { display: inline-flex; align-items: center; gap: 5px; }
   .tools .link svg, .pcard .link svg { width: 14px; height: 14px; flex: none; }
@@ -152,6 +160,9 @@
   .pcard .ex .s { font: 400 20px/1.4 var(--serif); }
   .pcard .ex .e { color: var(--muted); font-size: 15px; }
   .pcard .hint { color: var(--muted); font-size: 14px; margin-top: 14px; }
+  .pcard .cloze { font: 400 24px/1.5 var(--serif); }
+  .pcard .cloze .blank { display: inline-block; min-width: 2.5em; border-bottom: 2px solid var(--muted); }
+  .pcard .cloze .blank.filled { border-bottom-color: var(--lake); color: var(--lake); font-weight: 600; }
   .pr-actions { display: flex; gap: 12px; margin-top: 14px; }
   .pr-actions button { flex: 1; padding: 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 600; }
   .pr-actions .got { background: var(--lake); border-color: var(--lake); color: var(--on-lake); }
@@ -179,6 +190,19 @@
   .row { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end; }
   .row button { padding: 9px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
   .row .go { background: var(--lake); border-color: var(--lake); color: var(--on-lake); font-weight: 600; }
+  #settingsStatus { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+
+  /* ---------- Mobile "add a word" shortcut ---------- */
+  .fab { display: none; }
+  @media (max-width: 800px) {
+    .fab:not([hidden]) {
+      display: inline-flex; align-items: center; justify-content: center;
+      position: fixed; right: 18px; bottom: 18px; z-index: 20;
+      width: 56px; height: 56px; border: 0; border-radius: 999px;
+      background: var(--lake); color: var(--on-lake); font: 600 28px/1 var(--sans);
+      box-shadow: 0 4px 14px rgba(0,0,0,.3);
+    }
+  }
 
   /* ---------- Small-screen touch tuning ---------- */
   @media (max-width: 480px) {
@@ -209,9 +233,7 @@
     </div>
     <div class="mode">
       <span id="modePill" class="pill">Demo mode: saved in this browser</span>
-      <span id="modelPill" class="pill" hidden></span>
-      <button class="link" id="openSettings">Connect Google Sheet</button>
-      <button class="link" id="openPin" hidden>Enter shared PIN</button>
+      <button class="link" id="settingsMenuBtn" type="button" aria-label="Settings">⚙ Settings</button>
     </div>
   </header>
 
@@ -231,6 +253,8 @@
         <button type="button" data-c="ä">ä</button>
         <button type="button" data-c="ö">ö</button>
       </div>
+      <label for="f_source">Where did you see it? <small>(optional — grounds the AI's example sentence)</small></label>
+      <textarea id="f_source" placeholder="e.g. a sentence from a book, or “at work”"></textarea>
       <div class="fillrow">
         <button class="primary" id="fillBtn" type="button">Auto-fill with AI</button>
         <button class="link alt" id="manualBtn" type="button">Enter the details myself</button>
@@ -254,6 +278,8 @@
         <textarea id="f_exsv" lang="sv"></textarea>
         <label for="f_exen">Example sentence (English)</label>
         <textarea id="f_exen"></textarea>
+        <label for="f_tags">Tags <small>(comma-separated, e.g. food, home)</small></label>
+        <input id="f_tags" autocomplete="off">
 
         <div class="forms" id="formsPreview" hidden></div>
 
@@ -275,6 +301,8 @@
             <select id="filter"><option value="all">All words</option><option value="todo">To learn</option><option value="done">Learned</option></select>
             <label for="sort" class="sr">Sort words</label>
             <select id="sort"><option value="new">Newest first</option><option value="az">A to Z</option></select>
+            <label for="tagFilter" class="sr">Filter by tag</label>
+            <select id="tagFilter"><option value="">All tags</option></select>
             <button class="link" id="toggleAll" type="button">Expand all</button>
           </div>
         </div>
@@ -287,9 +315,19 @@
   <div id="practiceView" hidden>
     <div class="deckbar">
       <label for="deckMode" class="sr">Deck</label>
-      <select id="deckMode"><option value="todo">Words to learn</option><option value="all">All words</option></select>
+      <select id="deckMode"><option value="todo">Due today</option><option value="all">All words</option></select>
       <label for="deckDir" class="sr">Direction</label>
       <select id="deckDir"><option value="sv2en">Swedish to English</option><option value="en2sv">English to Swedish</option></select>
+      <label for="deckKind" class="sr">Drill type</label>
+      <select id="deckKind">
+        <option value="flash">Flashcards</option>
+        <option value="gender">En or ett?</option>
+        <option value="verb">Verb tenses</option>
+        <option value="adj">Adjective forms</option>
+        <option value="cloze">Cloze</option>
+      </select>
+      <label for="deckTag" class="sr">Filter by tag</label>
+      <select id="deckTag"><option value="">All tags</option></select>
       <button class="link" id="shuffleBtn" type="button">Shuffle again</button>
       <span class="progress" id="progress"></span>
     </div>
@@ -300,6 +338,8 @@
     </div>
     <p class="keys" id="keysHint" hidden>Space flips the card. 1 = still learning, 2 = I know it.</p>
   </div>
+
+  <button id="addFab" class="fab" type="button" hidden aria-label="Add a word">+</button>
 </div>
 
 <dialog id="settings">
@@ -307,6 +347,8 @@
   <p>Paste the Web app URL from your Apps Script deployment (it ends in <b>/exec</b>). Leave it empty to stay in demo mode.</p>
   <label for="apiUrl">Web app URL</label>
   <input id="apiUrl" placeholder="https://script.google.com/macros/s/…/exec">
+  <p class="sub" id="settingsStatus" hidden></p>
+  <button class="link" id="openPinFromSettings" type="button" hidden>Enter shared PIN</button>
   <div class="row">
     <button id="cancelSettings">Cancel</button>
     <button class="go" id="saveSettings">Save</button>
@@ -327,11 +369,16 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const FORM_COLS = ['Swedish Word','Pronunciation Guide','Part of Speech','English Meaning','Example Sentence (Swedish)','Example Sentence (English)'];
-const [W, PR, POS, EN, XS, XE] = FORM_COLS;
+const FORM_COLS = ['Swedish Word','Pronunciation Guide','Part of Speech','English Meaning','Example Sentence (Swedish)','Example Sentence (English)','Tags','Source'];
+const [W, PR, POS, EN, XS, XE, TAGS, SRC] = FORM_COLS;
+// AI auto-fill only ever returns the first 6 fields (Tags/Source are user-entered,
+// never overwritten by the AI response — see autofill()).
+const AI_FORM_COLS = FORM_COLS.slice(1, 6);
 const L = 'Learned';
 const GF = 'Grammar Forms';
-const FIELD_IDS = ['f_word','f_pron','f_pos','f_en','f_exsv','f_exen'];
+const SEEN = 'Seen As';
+const RS = 'Review State';   // not in FORM_COLS — never directly user-edited
+const FIELD_IDS = ['f_word','f_pron','f_pos','f_en','f_exsv','f_exen','f_tags','f_source'];
 const ICON_SPEAKER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8a5 5 0 0 1 0 8"/></svg>';
 const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
 const ICON_UNDO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>';
@@ -387,6 +434,12 @@ function clientMatches(row, q, qStem) {
     const sv = (f.sv || '').toLowerCase();
     if (sv && (sv === q || sv.includes(q))) return true;
   }
+  // "Seen As": inflected forms the word was looked up as before it got saved
+  // under its dictionary form, e.g. searching "gick" finds a row saved as "gå".
+  for (const s of parseSeenAs(row[SEEN])) {
+    const sv = s.toLowerCase();
+    if (sv && (sv === q || sv.includes(q))) return true;
+  }
   return !!(qStem && qStem.length >= 4 && stemWord(word) === qStem);
 }
 
@@ -413,16 +466,21 @@ async function fetchAllRows(force) {
 // free-text search, which matches substrings) this only returns a hit for an
 // exact saved word, an exact saved inflected form, or a stem match, so typing
 // "bil" doesn't wrongly flag "bilverkstad" as already saved.
-function findExistingRow(rows, word) {
+function findExistingRow(rows, word, exceptWord) {
   const q = (word || '').trim().toLowerCase();
   if (!q) return null;
+  const except = exceptWord ? exceptWord.trim().toLowerCase() : null;
   const qStem = stemWord(q);
   for (const r of rows) {
     const w = (r[W] || '').toLowerCase();
+    if (except && w === except) continue;
     if (w === q) return r;
     const forms = parseForms(r[GF]);
     for (const f of forms) {
       if ((f.sv || '').toLowerCase() === q) return r;
+    }
+    for (const s of parseSeenAs(r[SEEN])) {
+      if (s.toLowerCase() === q) return r;
     }
     if (qStem.length >= 4 && stemWord(w) === qStem) return r;
   }
@@ -473,14 +531,22 @@ async function apiSearch(q) {
   return rows.filter(r => clientMatches(r, n, qStem));
 }
 async function apiSave(row) {
+  row[W] = row[W].toLowerCase();   // canonical, case-insensitive storage key
   if (!apiUrl) {
     const rows = localRows();
     const i = rows.findIndex(r => r[W].toLowerCase() === row[W].toLowerCase());
     row[GF] = row[GF] || '[]';
-    if (i >= 0) { row[L] = rows[i][L] || ''; rows[i] = row; saveLocalRows(rows); return 'updated'; }
-    row[L] = ''; rows.push(row); saveLocalRows(rows); return 'added';
+    if (i >= 0) {
+      row[L] = rows[i][L] || '';
+      row[RS] = rows[i][RS] || '';
+      const merged = Array.from(new Set(parseSeenAs(rows[i][SEEN]).concat(parseSeenAs(row[SEEN]))));
+      row[SEEN] = JSON.stringify(merged);
+      rows[i] = row; saveLocalRows(rows); return 'updated';
+    }
+    row[L] = ''; row[RS] = row[RS] || ''; row[SEEN] = row[SEEN] || '[]';
+    rows.push(row); saveLocalRows(rows); return 'added';
   }
-  const action = (await post(row)).action;   // Learned is not sent, so the sheet keeps it
+  const action = (await post(row)).action;   // Learned/Review State are not sent, so the sheet keeps them
   invalidateRowsCache();
   return action;
 }
@@ -492,6 +558,17 @@ async function apiSetLearned(word, val) {
     return;
   }
   await post({ action: 'setLearned', word, learned: !!val });
+  invalidateRowsCache();
+}
+async function apiUpdateReview(word, state) {
+  const stateStr = JSON.stringify(state);
+  if (!apiUrl) {
+    const rows = localRows();
+    const r = rows.find(x => x[W].toLowerCase() === word.toLowerCase());
+    if (r) { r[RS] = stateStr; saveLocalRows(rows); }
+    return;
+  }
+  await post({ action: 'updateReview', word, reviewState: stateStr });
   invalidateRowsCache();
 }
 
@@ -509,8 +586,25 @@ function posClass(pos) {
   if (p === 'adjective') return 'adj';
   return 'other';
 }
-function parseForms(raw) {
-  try { const a = JSON.parse(raw || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+// "noun (en)" / "noun (ett)" -> 'en' / 'ett' / null. Used both for the gender
+// drill and to colour-code en/ett consistently wherever POS is shown.
+function genderOf(pos) {
+  const p = (pos || '').toLowerCase();
+  if (p.includes('(en)')) return 'en';
+  if (p.includes('(ett)')) return 'ett';
+  return null;
+}
+// Shared safe-JSON-parse pattern for every JSON-in-a-cell field (Grammar
+// Forms, Seen As, Review State) — never throws, falls back on malformed data.
+function safeJson(raw, fallback) {
+  try { return JSON.parse(raw || JSON.stringify(fallback)); } catch (e) { return fallback; }
+}
+function parseTags(raw) { return (raw || '').split(',').map(s => s.trim()).filter(Boolean); }
+function parseForms(raw) { const a = safeJson(raw, []); return Array.isArray(a) ? a : []; }
+function parseSeenAs(raw) { const a = safeJson(raw, []); return Array.isArray(a) ? a : []; }
+function parseReviewState(raw) {
+  const o = safeJson(raw, {});
+  return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
 }
 function formsTableHtml(forms) {
   if (!forms || !forms.length) return '';
@@ -529,20 +623,19 @@ function renderModePill() {
   const p = $('modePill');
   p.textContent = apiUrl ? 'Connected to Google Sheet' : 'Demo mode: saved in this browser';
   p.classList.toggle('live', !!apiUrl);
-  $('openSettings').textContent = apiUrl ? 'Change connection' : 'Connect Google Sheet';
-  $('openPin').hidden = !apiUrl;
-  $('openPin').textContent = appPin ? 'Change PIN' : 'Enter shared PIN';
+  $('openPinFromSettings').hidden = !apiUrl;
+  $('openPinFromSettings').textContent = appPin ? 'Change PIN' : 'Enter shared PIN';
   refreshModelInfo();
 }
 async function refreshModelInfo() {
-  const mp = $('modelPill');
-  if (!apiUrl) { mp.hidden = true; return; }
+  const el = $('settingsStatus');
+  if (!apiUrl) { el.hidden = true; return; }
   try {
     const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'meta=1');
     const data = await res.json();
-    if (data.ok && data.model) { mp.hidden = false; mp.textContent = 'Auto-fill: ' + data.model; }
-    else { mp.hidden = true; }
-  } catch (e) { mp.hidden = true; }
+    if (data.ok && data.model) { el.hidden = false; el.textContent = 'Auto-fill model: ' + data.model; }
+    else { el.hidden = true; }
+  } catch (e) { el.hidden = true; }
 }
 
 /* ================= WORDS VIEW ================= */
@@ -552,12 +645,25 @@ let sortMode = store.get('ordbok_sort', 'new');
 let filterMode = 'all';
 let shownKeys = [];
 let libStats = null;
+let tagFilterValue = '';
 function renderHeaderStats() {
   const el = $('headerStats');
   if (!libStats || !libStats.total) { el.hidden = true; return; }
-  const pct = Math.round((libStats.learned / libStats.total) * 100);
   el.hidden = false;
-  el.textContent = libStats.total + (libStats.total === 1 ? ' word saved' : ' words saved') + ' · ' + pct + '% learned';
+  el.textContent = libStats.dueToday + ' due today · ' + libStats.reviewedThisWeek + ' reviewed this week · ' + libStats.knownWell + ' known well';
+}
+// Populates the Words-tab and Practice-deck tag filters from the union of
+// every saved word's tags, preserving each select's current choice if it's
+// still available.
+function updateTagFilterOptions(allRows) {
+  const tags = new Set();
+  allRows.forEach(r => parseTags(r[TAGS]).forEach(t => tags.add(t)));
+  const sorted = Array.from(tags).sort((a, b) => a.localeCompare(b, 'sv'));
+  ['tagFilter', 'deckTag'].forEach(id => {
+    const sel = $(id), current = sel.value;
+    sel.innerHTML = '<option value="">All tags</option>' + sorted.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+    if (sorted.includes(current)) sel.value = current;
+  });
 }
 
 async function runSearch(autoOpenSingle) {
@@ -565,10 +671,23 @@ async function runSearch(autoOpenSingle) {
   const box = $('results'), count = $('count');
   try {
     let rows = await apiSearch(q);
+    if (!q) {
+      const today = todayStr(), weekAgo = daysAgoStr(7);
+      let dueToday = 0, reviewedThisWeek = 0, knownWell = 0;
+      rows.forEach(r => {
+        const st = reviewState(r);
+        if (st.due <= today) dueToday++;
+        if (st.last && st.last >= weekAgo) reviewedThisWeek++;
+        if ((st.reps || 0) >= 2) knownWell++;
+      });
+      libStats = { total: rows.length, dueToday, reviewedThisWeek, knownWell };
+      renderHeaderStats();
+      updateTagFilterOptions(rows);
+    }
     const learnedTotal = rows.filter(isLearned).length;
-    if (!q) { libStats = { total: rows.length, learned: learnedTotal }; renderHeaderStats(); }
     if (filterMode === 'todo') rows = rows.filter(r => !isLearned(r));
     if (filterMode === 'done') rows = rows.filter(isLearned);
+    if (tagFilterValue) rows = rows.filter(r => parseTags(r[TAGS]).includes(tagFilterValue));
     rows = sortMode === 'az'
       ? rows.slice().sort((a, b) => a[W].localeCompare(b[W], 'sv'))
       : rows.slice().reverse();                 // sheet is oldest-first
@@ -588,25 +707,29 @@ async function runSearch(autoOpenSingle) {
         : 'Your list is empty. Add your first word on the left.') + '</div>';
       return;
     }
-    box.innerHTML = '<div class="list">' + rows.map(r => `
+    box.innerHTML = '<div class="list">' + rows.map(r => { const gender = genderOf(r[POS]); return `
       <details class="entry${flashWord && keyOf(r) === flashWord ? ' flash' : ''}" data-key="${esc(keyOf(r))}" data-pos="${posClass(r[POS])}"${openSet.has(keyOf(r)) ? ' open' : ''}>
         <summary>
           <span class="sv" lang="sv">${hl(r[W], q)}</span>
           <span class="gloss">${hl(r[EN], q)}</span>
-          <span class="meta">${isLearned(r) ? '<span class="tick" title="Learned" aria-label="Learned">✓</span>' : ''}${r[POS] ? `<span class="pos">${esc(r[POS])}</span>` : ''}</span>
+          <span class="meta">${isLearned(r) ? '<span class="tick" title="Learned" aria-label="Learned">✓</span>' : ''}${gender ? `<span class="gender" data-g="${gender}">${gender}</span>` : ''}${r[POS] ? `<span class="pos">${esc(r[POS])}</span>` : ''}</span>
         </summary>
         <div class="detail">
           ${r[PR] ? `<div class="ipa">${esc(r[PR])}</div>` : ''}
           <p class="en">${esc(r[EN])}</p>
           ${(r[XS] || r[XE]) ? `<p class="ex"><span class="s" lang="sv">${esc(r[XS])}</span><br><span class="e">${esc(r[XE])}</span></p>` : ''}
           ${formsTableHtml(parseForms(r[GF])) ? `<div class="forms"><h3>Forms</h3>${formsTableHtml(parseForms(r[GF]))}</div>` : ''}
+          ${parseSeenAs(r[SEEN]).length ? `<p class="seen">Seen as: ${esc(parseSeenAs(r[SEEN]).join(', '))}</p>` : ''}
+          ${parseTags(r[TAGS]).length ? `<div class="tags">${parseTags(r[TAGS]).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}
           <div class="tools">
             <button class="link" data-say="${esc(r[W])}">${ICON_SPEAKER} Listen</button>
             <button class="link" data-learn="${esc(r[W])}" data-val="${isLearned(r) ? '0' : '1'}">${isLearned(r) ? ICON_UNDO + ' Mark as not learned' : ICON_CHECK + ' Mark as learned'}</button>
             <button class="link" data-edit="${esc(r[W])}">Edit</button>
+            <button class="link" data-regen="${esc(r[W])}">Regenerate</button>
+            <button class="link" data-report="${esc(r[W])}">Report an issue</button>
           </div>
         </div>
-      </details>`).join('') + '</div>';
+      </details>`; }).join('') + '</div>';
     flashWord = null;
   } catch (e) {
     count.textContent = '';
@@ -621,6 +744,8 @@ function updateToggleAll() {
 
 /* ---------- add-word form ---------- */
 let currentForms = [];
+let currentSeenAs = [];       // inflected forms typed/looked-up before landing on the dictionary form
+let editingWord = null;       // the word this form is currently editing, or null for a fresh add
 function setMsg(text, kind) { const m = $('addMsg'); m.textContent = text; m.className = 'msg ' + (kind || ''); }
 function showFields(show) { $('fields').hidden = !show; $('manualBtn').hidden = show; }
 function renderFormsPreview() {
@@ -631,35 +756,39 @@ function renderFormsPreview() {
 }
 function resetForm() {
   FIELD_IDS.forEach(id => $(id).value = '');
-  currentForms = []; renderFormsPreview();
+  currentForms = []; currentSeenAs = []; editingWord = null; renderFormsPreview();
   showFields(false);
 }
 function revealForEdit(r) {
   FORM_COLS.forEach((c, i) => $(FIELD_IDS[i]).value = r[c] || '');
-  currentForms = parseForms(r[GF]); renderFormsPreview();
+  currentForms = parseForms(r[GF]); currentSeenAs = parseSeenAs(r[SEEN]); editingWord = r[W];
+  renderFormsPreview();
   showFields(true);
 }
 
-async function autofill() {
+async function autofill(force) {
   const word = $('f_word').value.trim();
   if (!word) { setMsg('Type the Swedish word first.', 'err'); $('f_word').focus(); return; }
 
-  // Already saved (as this exact word, or as one of its inflected forms)?
-  // Skip the AI call entirely and just show what's already there.
-  const btn = $('fillBtn'); btn.disabled = true; btn.textContent = 'Checking…'; setMsg('');
-  try {
-    const rows = await fetchAllRows(false);
-    const existing = findExistingRow(rows, word);
-    if (existing) {
-      revealForEdit(existing);
-      setMsg('“' + existing[W] + '” already exists in your list — showing the saved entry.', 'ok');
-      flashWord = existing[W].toLowerCase();
-      openSet.add(flashWord);
-      $('saveBtn').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      return;
-    }
-  } catch (e) { /* lookup failed (e.g. offline) — fall through and try auto-fill as normal */ }
-  finally { btn.disabled = false; btn.textContent = 'Auto-fill with AI'; }
+  const btn = $('fillBtn');
+  if (!force) {
+    // Already saved (as this exact word, one of its inflected forms, or one of
+    // its Seen As entries)? Skip the AI call entirely and just show what's there.
+    btn.disabled = true; btn.textContent = 'Checking…'; setMsg('');
+    try {
+      const rows = await fetchAllRows(false);
+      const existing = findExistingRow(rows, word);
+      if (existing) {
+        revealForEdit(existing);
+        setMsg('“' + existing[W] + '” already exists in your list — showing the saved entry.', 'ok');
+        flashWord = existing[W].toLowerCase();
+        openSet.add(flashWord);
+        $('saveBtn').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+      }
+    } catch (e) { /* lookup failed (e.g. offline) — fall through and try auto-fill as normal */ }
+    finally { btn.disabled = false; btn.textContent = 'Auto-fill with AI'; }
+  }
 
   if (!apiUrl) {
     showFields(true);
@@ -668,8 +797,8 @@ async function autofill() {
   }
   btn.disabled = true; btn.textContent = 'Filling…'; setMsg('');
   try {
-    const data = await post({ action: 'autofill', word });
-    FORM_COLS.slice(1).forEach((c, i) => {
+    const data = await post({ action: 'autofill', word, sourceSentence: $('f_source').value.trim() });
+    AI_FORM_COLS.forEach((c, i) => {
       const el = $(FIELD_IDS[i + 1]);
       const v = (data.fields && data.fields[c]) || '';
       el.value = v;
@@ -678,7 +807,17 @@ async function autofill() {
     currentForms = parseForms(data.fields && data.fields[GF]);
     renderFormsPreview();
     showFields(true);
-    setMsg('');
+    // The AI normalises the headword to its dictionary form (e.g. "gick" -> "gå").
+    // If that differs from what was typed, switch the word field to it and
+    // remember the typed form as a "seen as" entry so search still finds it.
+    const lemma = ((data.fields && data.fields['Dictionary Form']) || '').trim();
+    if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
+      $('f_word').value = lemma;
+      currentSeenAs = Array.from(new Set(currentSeenAs.concat([word.toLowerCase()])));
+      setMsg('Saved under its dictionary form “' + lemma + '” — you looked it up as “' + word + '”.', 'ok');
+    } else {
+      setMsg('');
+    }
     $('saveBtn').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (e) {
     setMsg('Auto-fill failed: ' + e.message, 'err');
@@ -691,6 +830,20 @@ async function save() {
   row[GF] = JSON.stringify(currentForms);
   if (!row[W]) { setMsg('Type the Swedish word first.', 'err'); $('f_word').focus(); return; }
   if (!row[EN]) { setMsg('Add the English meaning.', 'err'); $('f_en').focus(); return; }
+
+  // Dedupe check: does a *different* row already look like this word (exact,
+  // saved inflected form, Seen As, or stem match)? Offer to fold it into that
+  // entry instead of creating a near-duplicate.
+  try {
+    const rows = await fetchAllRows(false);
+    const existing = findExistingRow(rows, row[W], editingWord);
+    if (existing && confirm('This looks like a form of the word already saved as “' + existing[W] + '”. Add it to that entry instead of creating a duplicate?')) {
+      currentSeenAs = Array.from(new Set(currentSeenAs.concat([row[W].toLowerCase()])));
+      row[W] = existing[W];
+    }
+  } catch (e) { /* lookup failed — fall through and save as typed */ }
+  if (currentSeenAs.length) row[SEEN] = JSON.stringify(currentSeenAs);
+
   const btn = $('saveBtn'); btn.disabled = true; setMsg('Saving…');
   try {
     const action = await apiSave(row);
@@ -706,19 +859,86 @@ async function save() {
   } finally { btn.disabled = false; }
 }
 
+/* ================= SPACED REPETITION (SM-2-lite) ================= */
+// Runs entirely client-side: Demo mode has no server at all, so the scheduling
+// math has to exist here regardless, and keeping it in one place (rather than
+// also in code.gs) avoids the kind of dual-implementation drift already
+// flagged for STEM_SUFFIXES. The server only ever stores the opaque JSON blob.
+const todayStr = () => new Date().toISOString().slice(0, 10);
+function daysAgoStr(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+// A never-reviewed row (new, or an older row saved before this feature
+// existed) is due today; a legacy "Learned=Yes" row gets a one-time re-prime
+// (reps=2) the first time the scheduler touches it, rather than a precise migration.
+function reviewState(r) {
+  const s = parseReviewState(r[RS]);
+  if (Object.keys(s).length) return s;
+  return { ef: 2.5, interval: 0, reps: isLearned(r) ? 2 : 0, due: todayStr(), last: '' };
+}
+function nextReviewState(state, knew) {
+  const s = Object.assign({ ef: 2.5, interval: 0, reps: 0, lapses: 0 }, state);
+  if (!knew) {
+    s.reps = 0; s.interval = 1; s.lapses = (s.lapses || 0) + 1; s.ef = Math.max(1.3, s.ef - 0.2);
+  } else {
+    s.reps = (s.reps || 0) + 1;
+    s.interval = s.reps === 1 ? 1 : s.reps === 2 ? 6 : Math.round(s.interval * s.ef);
+    s.ef = Math.min(2.8, s.ef + 0.1);
+  }
+  const due = new Date(); due.setDate(due.getDate() + s.interval);
+  s.due = due.toISOString().slice(0, 10); s.last = todayStr();
+  return s;
+}
+
 /* ================= PRACTICE VIEW ================= */
-const P = { deck: [], i: 0, flipped: false, dir: 'sv2en', mode: 'todo', got: 0, missed: [], total: 0 };
+const P = { deck: [], picks: [], i: 0, flipped: false, dir: 'sv2en', mode: 'todo', kind: 'flash', got: 0, missed: [], total: 0 };
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
+// Swedish å/ä/ö are distinct letters, not accented Latin ones, so this only
+// case-folds — never diacritic-strips — before locating `target` in `sentence`.
+function buildCloze(sentence, target) {
+  if (!sentence || !target) return null;
+  const idx = sentence.toLowerCase().indexOf(target.toLowerCase());
+  if (idx === -1) return null;
+  return { before: sentence.slice(0, idx), answer: sentence.slice(idx, idx + target.length), after: sentence.slice(idx + target.length) };
+}
+// Picks what a drill card should test for a given row, or null if the row
+// isn't eligible for that drill (no gender, no forms, no matchable example).
+function pickDrillTarget(kind, r) {
+  const forms = parseForms(r[GF]);
+  if (kind === 'gender') { const g = genderOf(r[POS]); return g ? { gender: g } : null; }
+  if (kind === 'verb' || kind === 'adj') {
+    // Gate on Part of Speech too, not just the forms shape — a verb's 4 forms
+    // (Infinitive/Present/Past/Supine) would otherwise also pass the "not the
+    // base label" filter for the adjective drill, and vice versa.
+    if ((r[POS] || '').toLowerCase() !== (kind === 'verb' ? 'verb' : 'adjective')) return null;
+    const baseLabel = kind === 'verb' ? 'Infinitive' : 'Base form (en-word)';
+    const candidates = forms.filter(f => f.label !== baseLabel && f.sv);
+    return candidates.length ? { form: candidates[Math.floor(Math.random() * candidates.length)] } : null;
+  }
+  if (kind === 'cloze') {
+    const pool = [];
+    const top = buildCloze(r[XS], r[W]);
+    if (top) pool.push({ cloze: top, en: r[XE] });
+    forms.forEach(f => { const c = buildCloze(f.example_sv, f.sv); if (c) pool.push({ cloze: c, en: f.example_en }); });
+    return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+  }
+  return null;
+}
+
 async function startPractice(deckOverride) {
-  P.dir = $('deckDir').value; P.mode = $('deckMode').value;
+  P.dir = $('deckDir').value; P.mode = $('deckMode').value; P.kind = $('deckKind').value;
+  const tag = $('deckTag').value;
   try {
     let deck = deckOverride;
     if (!deck) {
       const rows = await apiSearch('');
-      deck = P.mode === 'todo' ? rows.filter(r => !isLearned(r)) : rows.slice();
+      const today = todayStr();
+      deck = P.mode === 'todo' ? rows.filter(r => reviewState(r).due <= today) : rows.slice();
     }
-    P.deck = shuffle(deck.slice()); P.i = 0; P.flipped = false; P.got = 0; P.missed = []; P.total = P.deck.length;
+    if (tag) deck = deck.filter(r => parseTags(r[TAGS]).includes(tag));
+    if (P.kind !== 'flash') deck = deck.filter(r => !!pickDrillTarget(P.kind, r));
+    P.deck = shuffle(deck.slice());
+    P.picks = P.deck.map(r => P.kind === 'flash' ? null : pickDrillTarget(P.kind, r));
+    P.i = 0; P.flipped = false; P.got = 0; P.missed = []; P.total = P.deck.length;
     renderCard();
   } catch (e) {
     $('cardWrap').innerHTML = '<div class="empty">Could not load your words: ' + esc(e.message) + '</div>';
@@ -734,20 +954,24 @@ function renderCard() {
   $('progress').textContent = active ? 'Card ' + (P.i + 1) + ' of ' + P.total : '';
 
   if (!P.total) {
-    wrap.innerHTML = '<div class="empty">' + (P.mode === 'todo'
-      ? 'Nothing left to learn. Add more words, or switch the deck to All words.'
+    wrap.innerHTML = '<div class="empty">' + (P.kind !== 'flash'
+      ? 'No words are ready for this drill yet — add example sentences, forms, or a gender, or try Flashcards instead.'
+      : P.mode === 'todo'
+      ? 'Nothing due today. Add more words, switch the deck to All words, or come back later.'
       : 'No words yet. Add some on the Words tab.') + '</div>';
     return;
   }
   if (!active) {
     wrap.innerHTML = `<div class="pcard done" style="cursor:default"><h3>Deck finished</h3>
-      <p>${P.got} marked as learned${P.missed.length ? ', ' + P.missed.length + ' to review' : ''}.</p>
+      <p>${P.got} marked "I know it"${P.missed.length ? ', ' + P.missed.length + ' to review' : ''}.</p>
       <div class="row2">
         ${P.missed.length ? '<button type="button" id="missedBtn">Practice the ' + P.missed.length + ' to review</button>' : ''}
         <button type="button" id="restartBtn">Start again</button>
       </div></div>`;
     return;
   }
+  if (P.kind !== 'flash') { renderDrillCard(); return; }
+
   const r = P.deck[P.i], sv = P.dir === 'sv2en';
   const listen = `<button class="link" data-say="${esc(r[W])}">${ICON_SPEAKER} Listen</button>`;
   let inner;
@@ -767,14 +991,38 @@ function renderCard() {
   wrap.innerHTML = `<div class="pcard" id="card" tabindex="0" role="button" aria-label="${P.flipped ? 'Card answer' : 'Show answer'}">${inner}</div>`;
 }
 
+// Alternate card renderer for the SFI drills (gender / verb / adjective /
+// cloze). Same self-graded flip flow as flashcards, reusing P and answer().
+function renderDrillCard() {
+  const wrap = $('cardWrap');
+  const r = P.deck[P.i], pick = P.picks[P.i];
+  let front, back;
+  if (P.kind === 'gender') {
+    front = `<div class="big" lang="sv">${esc(r[W])}</div><div class="hint">en eller ett?</div>`;
+    back = `<span class="gender" data-g="${pick.gender}" style="font-size:18px">${pick.gender}</span><div class="big" lang="sv" style="margin-top:10px">${esc(r[W])}</div><div class="ans">${esc(r[EN])}</div>`;
+  } else if (P.kind === 'verb' || P.kind === 'adj') {
+    const baseLabel = P.kind === 'verb' ? 'Infinitive' : 'Base form (en-word)';
+    const base = parseForms(r[GF]).find(f => f.label === baseLabel);
+    front = `<div class="big" lang="sv">${esc((base && base.sv) || r[W])}</div><div class="hint">${esc(pick.form.label)}?</div>`;
+    const ex = pick.form.example_sv ? `<div class="ex"><span class="s" lang="sv">${esc(pick.form.example_sv)}</span>${pick.form.example_en ? '<br><span class="e">' + esc(pick.form.example_en) + '</span>' : ''}</div>` : '';
+    back = `<div class="big" lang="sv">${esc(pick.form.sv)}</div>${ex}`;
+  } else { // cloze
+    const c = pick.cloze;
+    front = `<div class="cloze" lang="sv">${esc(c.before)}<span class="blank">_____</span>${esc(c.after)}</div><div class="hint">What goes in the blank?</div>`;
+    back = `<div class="cloze" lang="sv">${esc(c.before)}<span class="blank filled">${esc(c.answer)}</span>${esc(c.after)}</div>${pick.en ? `<div class="ans">${esc(pick.en)}</div>` : ''}`;
+  }
+  const inner = P.flipped ? back : front;
+  wrap.innerHTML = `<div class="pcard" id="card" tabindex="0" role="button" aria-label="${P.flipped ? 'Card answer' : 'Show answer'}">${inner}</div>`;
+}
+
 function flip() { if (P.total && P.i < P.deck.length && !P.flipped) { P.flipped = true; renderCard(); $('card') && $('card').focus(); } }
 async function answer(knew) {
   if (!(P.total && P.i < P.deck.length && P.flipped)) return;
   const r = P.deck[P.i];
-  if (knew) {
-    P.got++;
-    if (!isLearned(r)) { r[L] = 'Yes'; apiSetLearned(r[W], true).catch(e => alert('Could not save “learned”: ' + e.message)); }
-  } else { P.missed.push(r); }
+  if (knew) P.got++; else P.missed.push(r);
+  const st = nextReviewState(reviewState(r), knew);
+  r[RS] = JSON.stringify(st);
+  apiUpdateReview(r[W], st).catch(e => alert('Could not save progress: ' + e.message));
   P.i++; P.flipped = false; renderCard();
   const c = $('card'); if (c) c.focus();
 }
@@ -785,6 +1033,7 @@ function setView(v) {
   $('wordsView').hidden = practice; $('practiceView').hidden = !practice;
   $('tabWords').setAttribute('aria-selected', String(!practice));
   $('tabPractice').setAttribute('aria-selected', String(practice));
+  $('addFab').hidden = practice;
   if (practice) startPractice(); else runSearch();
 }
 
@@ -792,8 +1041,8 @@ function setView(v) {
 $('tabWords').addEventListener('click', () => setView('words'));
 $('tabPractice').addEventListener('click', () => setView('practice'));
 
-$('fillBtn').addEventListener('click', autofill);
-$('manualBtn').addEventListener('click', () => { currentForms = []; renderFormsPreview(); showFields(true); setMsg(''); $('f_pron').focus(); });
+$('fillBtn').addEventListener('click', () => autofill());
+$('manualBtn').addEventListener('click', () => { currentForms = []; currentSeenAs = []; editingWord = null; renderFormsPreview(); showFields(true); setMsg(''); $('f_pron').focus(); });
 $('saveBtn').addEventListener('click', save);
 $('clearBtn').addEventListener('click', () => { resetForm(); setMsg(''); });
 $('f_word').addEventListener('keydown', e => {
@@ -812,6 +1061,7 @@ let t; $('q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(
 $('sort').value = sortMode;
 $('sort').addEventListener('change', () => { sortMode = $('sort').value; store.set('ordbok_sort', sortMode); runSearch(); });
 $('filter').addEventListener('change', () => { filterMode = $('filter').value; runSearch(); });
+$('tagFilter').addEventListener('change', () => { tagFilterValue = $('tagFilter').value; runSearch(); });
 $('toggleAll').addEventListener('click', () => {
   const allOpen = shownKeys.every(k => openSet.has(k));
   shownKeys.forEach(k => allOpen ? openSet.delete(k) : openSet.add(k));
@@ -825,7 +1075,7 @@ $('results').addEventListener('toggle', e => {
 }, true);
 
 $('results').addEventListener('click', async e => {
-  const btn = e.target.closest('[data-say], [data-learn], [data-edit]');
+  const btn = e.target.closest('[data-say], [data-learn], [data-edit], [data-regen], [data-report]');
   if (!btn) return;
   const d = btn.dataset;
   if (d.say) speak(d.say);
@@ -841,11 +1091,26 @@ $('results').addEventListener('click', async e => {
     setMsg('Editing “' + d.edit + '”. Saving will update the existing row.');
     $('f_word').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
+  if (d.regen) {
+    const rows = await apiSearch(d.regen);
+    const r = rows.find(x => x[W].toLowerCase() === d.regen.toLowerCase()); if (!r) return;
+    revealForEdit(r);
+    $('f_word').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    await autofill(true);
+  }
+  if (d.report) {
+    const subject = encodeURIComponent('Ordbok: issue with "' + d.report + '"');
+    const body = encodeURIComponent('Word: ' + d.report + '\n\nWhat looks wrong:\n');
+    window.location.href = 'mailto:?subject=' + subject + '&body=' + body;
+  }
 });
 
 $('deckMode').addEventListener('change', () => startPractice());
 $('deckDir').addEventListener('change', () => startPractice());
+$('deckKind').addEventListener('change', () => startPractice());
+$('deckTag').addEventListener('change', () => startPractice());
 $('shuffleBtn').addEventListener('click', () => startPractice());
+$('addFab').addEventListener('click', () => { $('f_word').scrollIntoView({ behavior: 'smooth', block: 'start' }); $('f_word').focus(); });
 $('stillBtn').addEventListener('click', () => answer(false));
 $('gotBtn').addEventListener('click', () => answer(true));
 $('practiceView').addEventListener('click', e => {
@@ -870,14 +1135,14 @@ document.addEventListener('keydown', e => {
   $('q').focus();
 });
 
-$('openSettings').addEventListener('click', () => { $('apiUrl').value = apiUrl; $('settings').showModal(); });
+$('settingsMenuBtn').addEventListener('click', () => { $('apiUrl').value = apiUrl; $('settings').showModal(); });
 $('cancelSettings').addEventListener('click', () => $('settings').close());
 $('saveSettings').addEventListener('click', () => {
   apiUrl = $('apiUrl').value.trim(); store.set('ordbok_api_url', apiUrl);
   invalidateRowsCache();
   $('settings').close(); renderModePill(); runSearch();
 });
-$('openPin').addEventListener('click', async () => {
+$('openPinFromSettings').addEventListener('click', async () => {
   const entered = await askPin();
   if (entered != null) { appPin = entered; store.set('ordbok_pin', appPin); renderModePill(); }
 });
