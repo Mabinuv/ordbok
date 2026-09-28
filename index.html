@@ -46,7 +46,7 @@
   header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
   h1 { font: 600 40px/1.1 var(--serif); margin: 0; letter-spacing: -.01em; }
   .sub { color: var(--muted); margin: 4px 0 0; }
-  .mode { font-size: 14px; display: flex; align-items: center; gap: 10px; }
+  .mode { font-size: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .pill { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
   .pill.live { color: var(--ok); border-color: var(--ok); }
   .stats { margin-top: 4px; }
@@ -123,7 +123,7 @@
   .entry .ex { margin: 0; padding-top: 10px; border-top: 1px dashed var(--line); }
   .entry .ex .s { font: 400 18px/1.4 var(--serif); }
   .entry .ex .e { color: var(--muted); font-size: 15px; }
-  .entry .tools { margin-top: 10px; display: flex; gap: 16px; font-size: 13px; }
+  .entry .tools { margin-top: 10px; display: flex; gap: 16px; font-size: 13px; flex-wrap: wrap; }
   .tools .link, .pcard .link { display: inline-flex; align-items: center; gap: 5px; }
   .tools .link svg, .pcard .link svg { width: 14px; height: 14px; flex: none; }
   @media (max-width: 560px) {
@@ -179,6 +179,24 @@
   .row { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end; }
   .row button { padding: 9px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
   .row .go { background: var(--lake); border-color: var(--lake); color: var(--on-lake); font-weight: 600; }
+
+  /* ---------- Small-screen touch tuning ---------- */
+  @media (max-width: 480px) {
+    body { padding: 18px 14px 50px; }
+    h1 { font-size: 30px; }
+    .mode { font-size: 13px; gap: 8px 10px; }
+    .panel { padding: 16px; }
+    .chars button { width: 44px; height: 42px; }
+    .tools .link, .pcard > .link { padding: 6px 0; min-height: 32px; }
+    .row button, .tab, #toggleAll, #shuffleBtn { min-height: 40px; }
+    .pcard { padding: 22px 16px; min-height: 250px; }
+    .pcard .big { font-size: 34px; }
+    .pcard .big.en { font-size: 25px; }
+    .pr-actions button { padding: 12px 8px; font-size: 14px; }
+    .deckbar { gap: 8px 10px; }
+    .forms th, .forms td { padding: 6px 4px; }
+    .forms td .sv { word-break: break-word; }
+  }
 </style>
 </head>
 <body>
