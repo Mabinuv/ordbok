@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ordbok – my Swedish word list</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #e9eef1;
+    --card: #fbfcfc;
+    --ink: #17303f;
+    --muted: #5b7080;
+    --line: #c5d1d8;
+    --lake: #1f5a7a;
+    --berry: #a4283f;
+    --ok: #2c6e49;
+    --on-lake: #fff;
+    --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --c-noun: #1f5a7a; --c-verb: #a4283f; --c-adj: #9c6b12; --c-other: #5b7080;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1b23; --card: #16262f; --ink: #e4edf2; --muted: #93a8b6;
+      --line: #2b414e; --lake: #7cc0e3; --berry: #ff8fa3; --ok: #7fd1a0; --on-lake: #0f1b23;
+      --c-noun: #7cc0e3; --c-verb: #ff8fa3; --c-adj: #e0b872; --c-other: #93a8b6;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--sans); padding: 26px 20px 60px; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  .sr { position: absolute; left: -9999px; }
+  button { font: inherit; cursor: pointer; }
+  .link { background: none; border: 0; color: var(--lake); text-decoration: underline; padding: 0; }
+  input, select, textarea {
+    width: 100%; font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px;
+  }
+  textarea { resize: vertical; min-height: 58px; }
+  :is(input, select, textarea, button, summary, .pcard):focus-visible { outline: 2px solid var(--lake); outline-offset: 2px; }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  h1 { font: 600 40px/1.1 var(--serif); margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  .mode { font-size: 14px; display: flex; align-items: center; gap: 10px; }
+  .pill { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
+  .pill.live { color: var(--ok); border-color: var(--ok); }
+  .stats { margin-top: 4px; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 18px 0 22px; }
+  .tab { background: none; border: 0; padding: 10px 18px; font-weight: 600; color: var(--muted); border-bottom: 3px solid transparent; margin-bottom: -1px; }
+  .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--berry); }
+
+  /* ---------- Words view ---------- */
+  #wordsView { display: grid; grid-template-columns: minmax(290px, 370px) 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 800px) {
+    #wordsView { grid-template-columns: 1fr; }
+    #wordsView .panel.add { order: 2; }
+    #wordsView > section[aria-label="Your words"] { order: 1; }
+  }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+  .panel.add { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+  @media (max-width: 800px) { .panel.add { position: static; max-height: none; } }
+  .panel h2 { font: 600 22px/1.2 var(--serif); margin: 0 0 14px; }
+  label { display: block; font-size: 14px; font-weight: 500; margin: 14px 0 5px; }
+  label small { font-weight: 400; color: var(--muted); }
+  .word-input { font: 600 24px/1.2 var(--serif); }
+  .chars { display: flex; gap: 6px; margin-top: 6px; }
+  .chars button { background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; width: 38px; height: 34px; font: 600 17px var(--serif); }
+  .chars button:hover { border-color: var(--lake); }
+  .primary { width: 100%; padding: 12px; border: 0; border-radius: 6px; background: var(--lake); color: var(--on-lake); font-weight: 600; }
+  .primary:disabled { opacity: .55; cursor: wait; }
+  .fillrow { margin-top: 14px; }
+  .fillrow .alt { display: block; margin: 10px auto 0; font-size: 14px; }
+  #fields { margin-top: 4px; border-top: 1px dashed var(--line); padding-top: 2px; }
+  #fields .review { font-size: 14px; color: var(--muted); margin: 12px 0 0; }
+  .saverow { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+  .saverow .primary { flex: 1; }
+  .msg { min-height: 22px; margin: 10px 0 0; font-size: 14px; }
+  .msg.ok { color: var(--ok); } .msg.err { color: var(--berry); }
+
+  .stick { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 4px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+  .stick input[type=search] { padding: 12px 14px; font-size: 18px; border-radius: 8px; background: var(--card); }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px 14px; margin-top: 10px; flex-wrap: wrap; }
+  .count { color: var(--muted); font-size: 14px; margin: 0; }
+  .tb { display: flex; align-items: center; gap: 12px; font-size: 14px; flex-wrap: wrap; }
+  .tb select { width: auto; padding: 4px 8px; font-size: 14px; }
+
+  .list { border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+  details.entry { border-bottom: 1px solid var(--line); border-left: 3px solid transparent; }
+  details.entry:last-child { border-bottom: 0; }
+  details.entry[open] { border-left-color: var(--c-other); }
+  details.entry[open][data-pos="noun"] { border-left-color: var(--c-noun); }
+  details.entry[open][data-pos="verb"] { border-left-color: var(--c-verb); }
+  details.entry[open][data-pos="adj"] { border-left-color: var(--c-adj); }
+  details.entry summary {
+    list-style: none; cursor: pointer; padding: 11px 16px 11px 14px;
+    display: grid; grid-template-columns: minmax(110px, 210px) minmax(0, 1fr) auto 14px; align-items: baseline; gap: 14px;
+  }
+  details.entry summary::-webkit-details-marker { display: none; }
+  details.entry summary:hover { background: color-mix(in srgb, var(--lake) 7%, transparent); }
+  details.entry summary::after {
+    content: ""; width: 7px; height: 7px; align-self: center; margin-right: 3px;
+    border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+    transform: rotate(45deg); transition: transform .15s;
+  }
+  details.entry[open] summary::after { transform: rotate(-135deg); }
+  .entry .sv { font: 600 22px/1.2 var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .entry .gloss { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .entry .meta { display: flex; align-items: center; gap: 8px; }
+  .entry .pos { font-size: 12px; color: var(--c-other); border: 1px solid currentColor; border-radius: 999px; padding: 0 9px; white-space: nowrap; }
+  details.entry[data-pos="noun"] .pos { color: var(--c-noun); }
+  details.entry[data-pos="verb"] .pos { color: var(--c-verb); }
+  details.entry[data-pos="adj"] .pos { color: var(--c-adj); }
+  .entry .tick { color: var(--ok); font-weight: 700; }
+  .entry .detail { padding: 2px 18px 16px 17px; }
+  .entry .ipa { color: var(--muted); font: italic 400 18px/1.3 var(--serif); }
+  .entry .en { margin: 6px 0 10px; font-size: 18px; }
+  .entry .ex { margin: 0; padding-top: 10px; border-top: 1px dashed var(--line); }
+  .entry .ex .s { font: 400 18px/1.4 var(--serif); }
+  .entry .ex .e { color: var(--muted); font-size: 15px; }
+  .entry .tools { margin-top: 10px; display: flex; gap: 16px; font-size: 13px; }
+  .tools .link, .pcard .link { display: inline-flex; align-items: center; gap: 5px; }
+  .tools .link svg, .pcard .link svg { width: 14px; height: 14px; flex: none; }
+  @media (max-width: 560px) {
+    details.entry summary { grid-template-columns: minmax(0, 1fr) auto 14px; }
+    .entry .gloss { grid-column: 1 / 2; grid-row: 2; }
+  }
+  mark { background: color-mix(in srgb, var(--berry) 22%, transparent); color: inherit; border-radius: 2px; }
+  .empty { border: 1px dashed var(--line); border-radius: 8px; padding: 26px; color: var(--muted); text-align: center; }
+  @media (prefers-reduced-motion: no-preference) { details.entry.flash { animation: flash 1.2s ease-out; } }
+  @keyframes flash { from { background: color-mix(in srgb, var(--ok) 25%, var(--card)); } to { background: var(--card); } }
+
+  /* ---------- Practice view ---------- */
+  #practiceView { max-width: 660px; margin: 0 auto; }
+  .deckbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 16px; font-size: 14px; }
+  .deckbar select { width: auto; padding: 5px 8px; font-size: 14px; }
+  .deckbar .progress { margin-left: auto; color: var(--muted); }
+  .pcard {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px; min-height: 290px; padding: 30px 26px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 8px; cursor: pointer;
+  }
+  .pcard .big { font: 600 46px/1.15 var(--serif); overflow-wrap: anywhere; }
+  .pcard .big.en { font: 500 32px/1.25 var(--sans); }
+  .pcard .ipa { color: var(--muted); font: italic 400 20px/1.3 var(--serif); }
+  .pcard .ans { font-size: 22px; margin-top: 6px; }
+  .pcard .ex { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); width: 100%; }
+  .pcard .ex .s { font: 400 20px/1.4 var(--serif); }
+  .pcard .ex .e { color: var(--muted); font-size: 15px; }
+  .pcard .hint { color: var(--muted); font-size: 14px; margin-top: 14px; }
+  .pr-actions { display: flex; gap: 12px; margin-top: 14px; }
+  .pr-actions button { flex: 1; padding: 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 600; }
+  .pr-actions .got { background: var(--lake); border-color: var(--lake); color: var(--on-lake); }
+  .keys { color: var(--muted); font-size: 13px; text-align: center; margin-top: 12px; }
+  .done { text-align: center; }
+  .done h3 { font: 600 28px var(--serif); margin: 0 0 8px; }
+  .done .row2 { display: flex; gap: 12px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
+  .done .row2 button { padding: 10px 16px; border-radius: 6px; border: 1px solid var(--lake); background: var(--card); color: var(--lake); font-weight: 600; }
+
+  .forms { margin-top: 16px; }
+  .forms h3 { font: 600 15px var(--sans); margin: 0 0 8px; color: var(--muted); text-transform: none; }
+  .forms table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .forms th, .forms td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .forms th { color: var(--muted); font-weight: 500; width: 30%; }
+  .forms td .sv { font: 600 16px var(--serif); }
+  .forms td .ex { display: block; margin-top: 2px; color: var(--muted); font-size: 12.5px; }
+  .forms td .ex .s { font-style: italic; }
+  .entry .forms { padding-top: 10px; border-top: 1px dashed var(--line); margin-top: 10px; }
+  .pcard .forms { width: 100%; text-align: left; }
+  .pcard .forms table { font-size: 13px; }
+  dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); max-width: 520px; width: calc(100% - 32px); padding: 22px; }
+  dialog::backdrop { background: rgba(10,20,28,.5); }
+  dialog h2 { font: 600 22px var(--serif); margin: 0 0 8px; }
+  dialog p { color: var(--muted); font-size: 14px; margin: 0 0 6px; }
+  .row { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end; }
+  .row button { padding: 9px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .row .go { background: var(--lake); border-color: var(--lake); color: var(--on-lake); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Ordbok</h1>
+      <p class="sub">Add a Swedish word once, find it again in a second.</p>
+      <p class="sub stats" id="headerStats" hidden></p>
+    </div>
+    <div class="mode">
+      <span id="modePill" class="pill">Demo mode: saved in this browser</span>
+      <span id="modelPill" class="pill" hidden></span>
+      <button class="link" id="openSettings">Connect Google Sheet</button>
+      <button class="link" id="openPin" hidden>Enter shared PIN</button>
+    </div>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tabWords" aria-selected="true" data-view="words">Words</button>
+    <button class="tab" role="tab" id="tabPractice" aria-selected="false" data-view="practice">Practice</button>
+  </div>
+
+  <!-- ===================== WORDS ===================== -->
+  <div id="wordsView">
+    <section class="panel add" aria-labelledby="addTitle">
+      <h2 id="addTitle">Add a word</h2>
+      <label for="f_word" class="sr">Swedish word</label>
+      <input id="f_word" class="word-input" autocomplete="off" spellcheck="false" lang="sv" placeholder="Type a Swedish word">
+      <div class="chars" aria-label="Insert Swedish letter">
+        <button type="button" data-c="å">å</button>
+        <button type="button" data-c="ä">ä</button>
+        <button type="button" data-c="ö">ö</button>
+      </div>
+      <div class="fillrow">
+        <button class="primary" id="fillBtn" type="button">Auto-fill with AI</button>
+        <button class="link alt" id="manualBtn" type="button">Enter the details myself</button>
+      </div>
+
+      <div id="fields" hidden>
+        <p class="review" id="reviewNote">Check the details, fix anything that looks wrong, then save.</p>
+        <label for="f_pron">Pronunciation guide <small>(e.g. hem-TREV-lig)</small></label>
+        <input id="f_pron" autocomplete="off">
+        <label for="f_pos">Part of speech</label>
+        <select id="f_pos">
+          <option value="">Choose…</option>
+          <option>noun (en)</option><option>noun (ett)</option><option>verb</option>
+          <option>adjective</option><option>adverb</option><option>pronoun</option>
+          <option>preposition</option><option>conjunction</option><option>interjection</option>
+          <option>numeral</option><option>phrase</option>
+        </select>
+        <label for="f_en">English meaning</label>
+        <input id="f_en" autocomplete="off">
+        <label for="f_exsv">Example sentence (Swedish)</label>
+        <textarea id="f_exsv" lang="sv"></textarea>
+        <label for="f_exen">Example sentence (English)</label>
+        <textarea id="f_exen"></textarea>
+
+        <div class="forms" id="formsPreview" hidden></div>
+
+        <div class="saverow">
+          <button class="primary" id="saveBtn" type="button">Save word</button>
+          <button class="link" id="clearBtn" type="button">Clear</button>
+        </div>
+      </div>
+      <p class="msg" id="addMsg" role="status" aria-live="polite"></p>
+    </section>
+
+    <section aria-label="Your words">
+      <div class="stick">
+        <input id="q" type="search" placeholder="Search a Swedish or English word ( / )" autocomplete="off" spellcheck="false" aria-label="Search words">
+        <div class="toolbar">
+          <p class="count" id="count"></p>
+          <div class="tb">
+            <label for="filter" class="sr">Show</label>
+            <select id="filter"><option value="all">All words</option><option value="todo">To learn</option><option value="done">Learned</option></select>
+            <label for="sort" class="sr">Sort words</label>
+            <select id="sort"><option value="new">Newest first</option><option value="az">A to Z</option></select>
+            <button class="link" id="toggleAll" type="button">Expand all</button>
+          </div>
+        </div>
+      </div>
+      <div id="results"></div>
+    </section>
+  </div>
+
+  <!-- ===================== PRACTICE ===================== -->
+  <div id="practiceView" hidden>
+    <div class="deckbar">
+      <label for="deckMode" class="sr">Deck</label>
+      <select id="deckMode"><option value="todo">Words to learn</option><option value="all">All words</option></select>
+      <label for="deckDir" class="sr">Direction</label>
+      <select id="deckDir"><option value="sv2en">Swedish to English</option><option value="en2sv">English to Swedish</option></select>
+      <button class="link" id="shuffleBtn" type="button">Shuffle again</button>
+      <span class="progress" id="progress"></span>
+    </div>
+    <div id="cardWrap"></div>
+    <div class="pr-actions" id="prActions" hidden>
+      <button type="button" id="stillBtn">Still learning</button>
+      <button type="button" id="gotBtn" class="got">I know it</button>
+    </div>
+    <p class="keys" id="keysHint" hidden>Space flips the card. 1 = still learning, 2 = I know it.</p>
+  </div>
+</div>
+
+<dialog id="settings">
+  <h2>Connect your Google Sheet</h2>
+  <p>Paste the Web app URL from your Apps Script deployment (it ends in <b>/exec</b>). Leave it empty to stay in demo mode.</p>
+  <label for="apiUrl">Web app URL</label>
+  <input id="apiUrl" placeholder="https://script.google.com/macros/s/…/exec">
+  <div class="row">
+    <button id="cancelSettings">Cancel</button>
+    <button class="go" id="saveSettings">Save</button>
+  </div>
+</dialog>
+
+<dialog id="pinDialog">
+  <h2>Enter the shared PIN</h2>
+  <p>Whoever shared this page with you can give you the PIN. You'll only need to enter it once on this device.</p>
+  <label for="pinInput" class="sr">PIN</label>
+  <input id="pinInput" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN">
+  <p class="msg err" id="pinMsg"></p>
+  <div class="row">
+    <button id="cancelPin">Cancel</button>
+    <button class="go" id="savePin">Save</button>
+  </div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const FORM_COLS = ['Swedish Word','Pronunciation Guide','Part of Speech','English Meaning','Example Sentence (Swedish)','Example Sentence (English)'];
+const [W, PR, POS, EN, XS, XE] = FORM_COLS;
+const L = 'Learned';
+const GF = 'Grammar Forms';
+const FIELD_IDS = ['f_word','f_pron','f_pos','f_en','f_exsv','f_exen'];
+const ICON_SPEAKER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8a5 5 0 0 1 0 8"/></svg>';
+const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+const ICON_UNDO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>';
+
+
+/* ---------- storage helpers (guarded: storage can be unavailable) ---------- */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+let apiUrl = store.get('ordbok_api_url', '');
+let appPin = store.get('ordbok_pin', '');
+let memoryFallback = [];
+
+const isLearned = r => String(r[L] || '').toLowerCase() === 'yes';
+const keyOf = r => r[W].toLowerCase();
+
+/* ---------- data layer: Google Sheet when connected, browser otherwise ---------- */
+function localRows() {
+  try { return JSON.parse(store.get('ordbok_rows', '[]')); } catch (e) { return memoryFallback; }
+}
+function saveLocalRows(rows) { memoryFallback = rows; store.set('ordbok_rows', JSON.stringify(rows)); }
+
+/* ---------- "find it in any form" matching (dictionary-style search) ---------- */
+// Best-effort Swedish suffix stripper. Used only as a fallback for words that
+// don't have saved Grammar Forms — the primary match is against the exact
+// inflected forms the AI already saved (see clientMatches below). Not
+// linguistically perfect, but self-consistent: both sides of a comparison are
+// always stemmed the same way, so it still finds e.g. flygplatserna -> flygplats.
+// Deliberately has NO single-letter suffixes (no bare "n", "t", "s"): those are
+// too common as the last letter of an unrelated word and cause false matches —
+// e.g. "något" (something) and "någon" (any/someone) both end in one letter
+// and would otherwise collapse to the same fake stem. Only genuine multi-letter
+// Swedish inflection endings are stripped, and the remaining stem must be at
+// least 4 characters, which trades a little recall for far fewer false hits.
+const STEM_SUFFIXES = ['arna','orna','erna','ana','ens','ets','are','ast','ade','and','else','or','ar','er','en','et','na'];
+function stemWord(w) {
+  w = (w || '').toLowerCase();
+  for (const suf of STEM_SUFFIXES) {
+    if (w.length - suf.length >= 4 && w.endsWith(suf)) return w.slice(0, -suf.length);
+  }
+  return w;
+}
+// True if row matches query q (already lowercased/trimmed), checking the saved
+// word, the English meaning, every saved inflected form (exact/substring), and
+// finally a stem-based fallback against the base word.
+function clientMatches(row, q, qStem) {
+  if (!q) return true;
+  const word = (row[W] || '').toLowerCase(), meaning = (row[EN] || '').toLowerCase();
+  if (word.includes(q) || meaning.includes(q)) return true;
+  const forms = parseForms(row[GF]);
+  for (const f of forms) {
+    const sv = (f.sv || '').toLowerCase();
+    if (sv && (sv === q || sv.includes(q))) return true;
+  }
+  return !!(qStem && qStem.length >= 4 && stemWord(word) === qStem);
+}
+
+// Client-side cache of the full word list, so typing in the search box filters
+// in memory instead of round-tripping to Apps Script/Sheets on every
+// keystroke (that round trip is what made search feel slow). Cleared/refetched
+// after any save/edit/learn so changes show up right away, and refreshed
+// automatically after a short TTL so other people's edits to a shared sheet appear.
+let allRowsCache = null;
+let allRowsCacheAt = 0;
+const ALL_ROWS_TTL_MS = 30000;
+function invalidateRowsCache() { allRowsCache = null; }
+async function fetchAllRows(force) {
+  if (!apiUrl) return localRows();
+  if (!force && allRowsCache && (Date.now() - allRowsCacheAt) < ALL_ROWS_TTL_MS) return allRowsCache;
+  const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'q=');
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'Search failed');
+  allRowsCache = data.rows; allRowsCacheAt = Date.now();
+  return allRowsCache;
+}
+
+// Strict "does this word already exist" lookup — unlike clientMatches (used for
+// free-text search, which matches substrings) this only returns a hit for an
+// exact saved word, an exact saved inflected form, or a stem match, so typing
+// "bil" doesn't wrongly flag "bilverkstad" as already saved.
+function findExistingRow(rows, word) {
+  const q = (word || '').trim().toLowerCase();
+  if (!q) return null;
+  const qStem = stemWord(q);
+  for (const r of rows) {
+    const w = (r[W] || '').toLowerCase();
+    if (w === q) return r;
+    const forms = parseForms(r[GF]);
+    for (const f of forms) {
+      if ((f.sv || '').toLowerCase() === q) return r;
+    }
+    if (qStem.length >= 4 && stemWord(w) === qStem) return r;
+  }
+  return null;
+}
+
+// Opens the PIN dialog and resolves with the entered PIN, or null if cancelled.
+function askPin(errorText) {
+  return new Promise(resolve => {
+    $('pinMsg').textContent = errorText || '';
+    $('pinInput').value = '';
+    $('pinDialog').showModal();
+    $('pinInput').focus();
+    const cleanup = () => {
+      $('pinDialog').close();
+      $('savePin').removeEventListener('click', onSave);
+      $('cancelPin').removeEventListener('click', onCancel);
+      $('pinInput').removeEventListener('keydown', onKey);
+    };
+    const onSave = () => { const v = $('pinInput').value.trim(); cleanup(); resolve(v); };
+    const onCancel = () => { cleanup(); resolve(null); };
+    const onKey = e => { if (e.key === 'Enter') { e.preventDefault(); onSave(); } };
+    $('savePin').addEventListener('click', onSave);
+    $('cancelPin').addEventListener('click', onCancel);
+    $('pinInput').addEventListener('keydown', onKey);
+  });
+}
+async function post(body, isRetry) {
+  // text/plain avoids a CORS preflight, which Apps Script cannot answer
+  const payload = appPin ? Object.assign({}, body, { pin: appPin }) : body;
+  const res = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (!data.ok && /pin/i.test(data.error || '') && !isRetry) {
+    const entered = await askPin(data.error === 'Incorrect PIN' ? 'That PIN was not correct. Try again.' : '');
+    if (entered == null) throw new Error(data.error || 'Request failed');
+    appPin = entered; store.set('ordbok_pin', appPin);
+    renderModePill();
+    return post(body, true);
+  }
+  if (!data.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+async function apiSearch(q) {
+  const n = q.trim().toLowerCase();
+  const rows = await fetchAllRows(false);
+  if (!n) return rows;
+  const qStem = stemWord(n);
+  return rows.filter(r => clientMatches(r, n, qStem));
+}
+async function apiSave(row) {
+  if (!apiUrl) {
+    const rows = localRows();
+    const i = rows.findIndex(r => r[W].toLowerCase() === row[W].toLowerCase());
+    row[GF] = row[GF] || '[]';
+    if (i >= 0) { row[L] = rows[i][L] || ''; rows[i] = row; saveLocalRows(rows); return 'updated'; }
+    row[L] = ''; rows.push(row); saveLocalRows(rows); return 'added';
+  }
+  const action = (await post(row)).action;   // Learned is not sent, so the sheet keeps it
+  invalidateRowsCache();
+  return action;
+}
+async function apiSetLearned(word, val) {
+  if (!apiUrl) {
+    const rows = localRows();
+    const r = rows.find(x => x[W].toLowerCase() === word.toLowerCase());
+    if (r) { r[L] = val ? 'Yes' : ''; saveLocalRows(rows); }
+    return;
+  }
+  await post({ action: 'setLearned', word, learned: !!val });
+  invalidateRowsCache();
+}
+
+/* ---------- small helpers ---------- */
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function hl(text, q) {
+  const t = esc(text); if (!q) return t;
+  const re = new RegExp('(' + esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
+  return t.replace(re, '<mark>$1</mark>');
+}
+function posClass(pos) {
+  const p = (pos || '').toLowerCase();
+  if (p.startsWith('noun')) return 'noun';
+  if (p === 'verb') return 'verb';
+  if (p === 'adjective') return 'adj';
+  return 'other';
+}
+function parseForms(raw) {
+  try { const a = JSON.parse(raw || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+function formsTableHtml(forms) {
+  if (!forms || !forms.length) return '';
+  return '<table><tbody>' + forms.map(f => `
+      <tr><th>${esc(f.label)}</th><td>
+        <span class="sv" lang="sv">${esc(f.sv)}</span>
+        ${(f.example_sv || f.example_en) ? `<span class="ex"><span class="s" lang="sv">${esc(f.example_sv)}</span>${f.example_en ? ' — ' + esc(f.example_en) : ''}</span>` : ''}
+      </td></tr>`).join('') + '</tbody></table>';
+}
+
+function speak(word) {
+  if (!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(word); u.lang = 'sv-SE'; speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+function renderModePill() {
+  const p = $('modePill');
+  p.textContent = apiUrl ? 'Connected to Google Sheet' : 'Demo mode: saved in this browser';
+  p.classList.toggle('live', !!apiUrl);
+  $('openSettings').textContent = apiUrl ? 'Change connection' : 'Connect Google Sheet';
+  $('openPin').hidden = !apiUrl;
+  $('openPin').textContent = appPin ? 'Change PIN' : 'Enter shared PIN';
+  refreshModelInfo();
+}
+async function refreshModelInfo() {
+  const mp = $('modelPill');
+  if (!apiUrl) { mp.hidden = true; return; }
+  try {
+    const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'meta=1');
+    const data = await res.json();
+    if (data.ok && data.model) { mp.hidden = false; mp.textContent = 'Auto-fill: ' + data.model; }
+    else { mp.hidden = true; }
+  } catch (e) { mp.hidden = true; }
+}
+
+/* ================= WORDS VIEW ================= */
+let flashWord = null;
+const openSet = new Set();
+let sortMode = store.get('ordbok_sort', 'new');
+let filterMode = 'all';
+let shownKeys = [];
+let libStats = null;
+function renderHeaderStats() {
+  const el = $('headerStats');
+  if (!libStats || !libStats.total) { el.hidden = true; return; }
+  const pct = Math.round((libStats.learned / libStats.total) * 100);
+  el.hidden = false;
+  el.textContent = libStats.total + (libStats.total === 1 ? ' word saved' : ' words saved') + ' · ' + pct + '% learned';
+}
+
+async function runSearch(autoOpenSingle) {
+  const q = $('q').value.trim();
+  const box = $('results'), count = $('count');
+  try {
+    let rows = await apiSearch(q);
+    const learnedTotal = rows.filter(isLearned).length;
+    if (!q) { libStats = { total: rows.length, learned: learnedTotal }; renderHeaderStats(); }
+    if (filterMode === 'todo') rows = rows.filter(r => !isLearned(r));
+    if (filterMode === 'done') rows = rows.filter(isLearned);
+    rows = sortMode === 'az'
+      ? rows.slice().sort((a, b) => a[W].localeCompare(b[W], 'sv'))
+      : rows.slice().reverse();                 // sheet is oldest-first
+    if (autoOpenSingle && q && rows.length === 1) openSet.add(keyOf(rows[0]));
+    shownKeys = rows.map(keyOf);
+
+    count.textContent = q
+      ? rows.length + (rows.length === 1 ? ' match' : ' matches') + ' for “' + q + '”'
+      : rows.length + (rows.length === 1 ? ' word' : ' words') + (filterMode === 'all' ? ' · ' + learnedTotal + ' learned' : '');
+    updateToggleAll();
+
+    if (!rows.length) {
+      box.innerHTML = '<div class="empty">' + (q
+        ? 'No word found. Type it in the form and press Auto-fill to add “' + esc(q) + '”.'
+        : filterMode === 'todo' ? 'Nothing left to learn. Nice work.'
+        : filterMode === 'done' ? 'No learned words yet. Mark words as learned from the list or in Practice.'
+        : 'Your list is empty. Add your first word on the left.') + '</div>';
+      return;
+    }
+    box.innerHTML = '<div class="list">' + rows.map(r => `
+      <details class="entry${flashWord && keyOf(r) === flashWord ? ' flash' : ''}" data-key="${esc(keyOf(r))}" data-pos="${posClass(r[POS])}"${openSet.has(keyOf(r)) ? ' open' : ''}>
+        <summary>
+          <span class="sv" lang="sv">${hl(r[W], q)}</span>
+          <span class="gloss">${hl(r[EN], q)}</span>
+          <span class="meta">${isLearned(r) ? '<span class="tick" title="Learned" aria-label="Learned">✓</span>' : ''}${r[POS] ? `<span class="pos">${esc(r[POS])}</span>` : ''}</span>
+        </summary>
+        <div class="detail">
+          ${r[PR] ? `<div class="ipa">${esc(r[PR])}</div>` : ''}
+          <p class="en">${esc(r[EN])}</p>
+          ${(r[XS] || r[XE]) ? `<p class="ex"><span class="s" lang="sv">${esc(r[XS])}</span><br><span class="e">${esc(r[XE])}</span></p>` : ''}
+          ${formsTableHtml(parseForms(r[GF])) ? `<div class="forms"><h3>Forms</h3>${formsTableHtml(parseForms(r[GF]))}</div>` : ''}
+          <div class="tools">
+            <button class="link" data-say="${esc(r[W])}">${ICON_SPEAKER} Listen</button>
+            <button class="link" data-learn="${esc(r[W])}" data-val="${isLearned(r) ? '0' : '1'}">${isLearned(r) ? ICON_UNDO + ' Mark as not learned' : ICON_CHECK + ' Mark as learned'}</button>
+            <button class="link" data-edit="${esc(r[W])}">Edit</button>
+          </div>
+        </div>
+      </details>`).join('') + '</div>';
+    flashWord = null;
+  } catch (e) {
+    count.textContent = '';
+    box.innerHTML = '<div class="empty">Could not reach your Google Sheet: ' + esc(e.message) + '. Check the Web app URL in Connect Google Sheet.</div>';
+  }
+}
+function updateToggleAll() {
+  const allOpen = shownKeys.length > 0 && shownKeys.every(k => openSet.has(k));
+  $('toggleAll').textContent = allOpen ? 'Collapse all' : 'Expand all';
+  $('toggleAll').hidden = shownKeys.length < 2;
+}
+
+/* ---------- add-word form ---------- */
+let currentForms = [];
+function setMsg(text, kind) { const m = $('addMsg'); m.textContent = text; m.className = 'msg ' + (kind || ''); }
+function showFields(show) { $('fields').hidden = !show; $('manualBtn').hidden = show; }
+function renderFormsPreview() {
+  const box = $('formsPreview');
+  if (!currentForms.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = '<h3>Forms to learn</h3>' + formsTableHtml(currentForms);
+}
+function resetForm() {
+  FIELD_IDS.forEach(id => $(id).value = '');
+  currentForms = []; renderFormsPreview();
+  showFields(false);
+}
+function revealForEdit(r) {
+  FORM_COLS.forEach((c, i) => $(FIELD_IDS[i]).value = r[c] || '');
+  currentForms = parseForms(r[GF]); renderFormsPreview();
+  showFields(true);
+}
+
+async function autofill() {
+  const word = $('f_word').value.trim();
+  if (!word) { setMsg('Type the Swedish word first.', 'err'); $('f_word').focus(); return; }
+
+  // Already saved (as this exact word, or as one of its inflected forms)?
+  // Skip the AI call entirely and just show what's already there.
+  const btn = $('fillBtn'); btn.disabled = true; btn.textContent = 'Checking…'; setMsg('');
+  try {
+    const rows = await fetchAllRows(false);
+    const existing = findExistingRow(rows, word);
+    if (existing) {
+      revealForEdit(existing);
+      setMsg('“' + existing[W] + '” already exists in your list — showing the saved entry.', 'ok');
+      flashWord = existing[W].toLowerCase();
+      openSet.add(flashWord);
+      $('saveBtn').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      return;
+    }
+  } catch (e) { /* lookup failed (e.g. offline) — fall through and try auto-fill as normal */ }
+  finally { btn.disabled = false; btn.textContent = 'Auto-fill with AI'; }
+
+  if (!apiUrl) {
+    showFields(true);
+    setMsg('Auto-fill needs the Google Sheet connection (it runs through your Apps Script). You can fill in the details yourself.', 'err');
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Filling…'; setMsg('');
+  try {
+    const data = await post({ action: 'autofill', word });
+    FORM_COLS.slice(1).forEach((c, i) => {
+      const el = $(FIELD_IDS[i + 1]);
+      const v = (data.fields && data.fields[c]) || '';
+      el.value = v;
+      if (el.tagName === 'SELECT' && el.value !== v) el.value = '';
+    });
+    currentForms = parseForms(data.fields && data.fields[GF]);
+    renderFormsPreview();
+    showFields(true);
+    setMsg('');
+    $('saveBtn').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) {
+    setMsg('Auto-fill failed: ' + e.message, 'err');
+  } finally { btn.disabled = false; btn.textContent = 'Auto-fill with AI'; }
+}
+
+async function save() {
+  const row = {};
+  FORM_COLS.forEach((c, i) => row[c] = $(FIELD_IDS[i]).value.trim());
+  row[GF] = JSON.stringify(currentForms);
+  if (!row[W]) { setMsg('Type the Swedish word first.', 'err'); $('f_word').focus(); return; }
+  if (!row[EN]) { setMsg('Add the English meaning.', 'err'); $('f_en').focus(); return; }
+  const btn = $('saveBtn'); btn.disabled = true; setMsg('Saving…');
+  try {
+    const action = await apiSave(row);
+    setMsg('“' + row[W] + '” ' + (action === 'updated' ? 'updated.' : 'saved.'), 'ok');
+    resetForm();
+    $('f_word').focus();
+    flashWord = row[W].toLowerCase();
+    openSet.add(flashWord);
+    $('q').value = row[W];
+    await runSearch();
+  } catch (e) {
+    setMsg('Could not save: ' + e.message, 'err');
+  } finally { btn.disabled = false; }
+}
+
+/* ================= PRACTICE VIEW ================= */
+const P = { deck: [], i: 0, flipped: false, dir: 'sv2en', mode: 'todo', got: 0, missed: [], total: 0 };
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+async function startPractice(deckOverride) {
+  P.dir = $('deckDir').value; P.mode = $('deckMode').value;
+  try {
+    let deck = deckOverride;
+    if (!deck) {
+      const rows = await apiSearch('');
+      deck = P.mode === 'todo' ? rows.filter(r => !isLearned(r)) : rows.slice();
+    }
+    P.deck = shuffle(deck.slice()); P.i = 0; P.flipped = false; P.got = 0; P.missed = []; P.total = P.deck.length;
+    renderCard();
+  } catch (e) {
+    $('cardWrap').innerHTML = '<div class="empty">Could not load your words: ' + esc(e.message) + '</div>';
+    $('prActions').hidden = true; $('keysHint').hidden = true;
+  }
+}
+
+function renderCard() {
+  const wrap = $('cardWrap');
+  const active = P.total > 0 && P.i < P.deck.length;
+  $('prActions').hidden = !(active && P.flipped);
+  $('keysHint').hidden = !active;
+  $('progress').textContent = active ? 'Card ' + (P.i + 1) + ' of ' + P.total : '';
+
+  if (!P.total) {
+    wrap.innerHTML = '<div class="empty">' + (P.mode === 'todo'
+      ? 'Nothing left to learn. Add more words, or switch the deck to All words.'
+      : 'No words yet. Add some on the Words tab.') + '</div>';
+    return;
+  }
+  if (!active) {
+    wrap.innerHTML = `<div class="pcard done" style="cursor:default"><h3>Deck finished</h3>
+      <p>${P.got} marked as learned${P.missed.length ? ', ' + P.missed.length + ' to review' : ''}.</p>
+      <div class="row2">
+        ${P.missed.length ? '<button type="button" id="missedBtn">Practice the ' + P.missed.length + ' to review</button>' : ''}
+        <button type="button" id="restartBtn">Start again</button>
+      </div></div>`;
+    return;
+  }
+  const r = P.deck[P.i], sv = P.dir === 'sv2en';
+  const listen = `<button class="link" data-say="${esc(r[W])}">${ICON_SPEAKER} Listen</button>`;
+  let inner;
+  if (!P.flipped) {
+    inner = sv
+      ? `<div class="big" lang="sv">${esc(r[W])}</div>${listen}`
+      : `<div class="big en">${esc(r[EN])}</div>`;
+    inner += '<div class="hint">Tap the card or press Space to see the answer</div>';
+  } else {
+    const ex = (r[XS] || r[XE]) ? `<div class="ex"><span class="s" lang="sv">${esc(r[XS])}</span><br><span class="e">${esc(r[XE])}</span></div>` : '';
+    const formsHtml = formsTableHtml(parseForms(r[GF]));
+    const forms = formsHtml ? `<div class="forms">${formsHtml}</div>` : '';
+    inner = sv
+      ? `<div class="big" lang="sv">${esc(r[W])}</div><div class="ipa">${esc(r[PR])}</div><div class="ans">${esc(r[EN])}</div>${ex}${forms}`
+      : `<div class="big en">${esc(r[EN])}</div><div class="big" lang="sv" style="margin-top:8px">${esc(r[W])}</div><div class="ipa">${esc(r[PR])}</div>${listen}${ex}${forms}`;
+  }
+  wrap.innerHTML = `<div class="pcard" id="card" tabindex="0" role="button" aria-label="${P.flipped ? 'Card answer' : 'Show answer'}">${inner}</div>`;
+}
+
+function flip() { if (P.total && P.i < P.deck.length && !P.flipped) { P.flipped = true; renderCard(); $('card') && $('card').focus(); } }
+async function answer(knew) {
+  if (!(P.total && P.i < P.deck.length && P.flipped)) return;
+  const r = P.deck[P.i];
+  if (knew) {
+    P.got++;
+    if (!isLearned(r)) { r[L] = 'Yes'; apiSetLearned(r[W], true).catch(e => alert('Could not save “learned”: ' + e.message)); }
+  } else { P.missed.push(r); }
+  P.i++; P.flipped = false; renderCard();
+  const c = $('card'); if (c) c.focus();
+}
+
+/* ================= VIEW SWITCHING ================= */
+function setView(v) {
+  const practice = v === 'practice';
+  $('wordsView').hidden = practice; $('practiceView').hidden = !practice;
+  $('tabWords').setAttribute('aria-selected', String(!practice));
+  $('tabPractice').setAttribute('aria-selected', String(practice));
+  if (practice) startPractice(); else runSearch();
+}
+
+/* ================= EVENTS ================= */
+$('tabWords').addEventListener('click', () => setView('words'));
+$('tabPractice').addEventListener('click', () => setView('practice'));
+
+$('fillBtn').addEventListener('click', autofill);
+$('manualBtn').addEventListener('click', () => { currentForms = []; renderFormsPreview(); showFields(true); setMsg(''); $('f_pron').focus(); });
+$('saveBtn').addEventListener('click', save);
+$('clearBtn').addEventListener('click', () => { resetForm(); setMsg(''); });
+$('f_word').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('fields').hidden ? autofill() : save(); }
+});
+$('fields').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); save(); }
+});
+document.querySelector('.chars').addEventListener('click', e => {
+  const c = e.target.dataset.c; if (!c) return;
+  const el = $('f_word'); const s = el.selectionStart ?? el.value.length, en = el.selectionEnd ?? s;
+  el.value = el.value.slice(0, s) + c + el.value.slice(en); el.focus(); el.setSelectionRange(s + 1, s + 1);
+});
+
+let t; $('q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => runSearch(true), 80); });
+$('sort').value = sortMode;
+$('sort').addEventListener('change', () => { sortMode = $('sort').value; store.set('ordbok_sort', sortMode); runSearch(); });
+$('filter').addEventListener('change', () => { filterMode = $('filter').value; runSearch(); });
+$('toggleAll').addEventListener('click', () => {
+  const allOpen = shownKeys.every(k => openSet.has(k));
+  shownKeys.forEach(k => allOpen ? openSet.delete(k) : openSet.add(k));
+  runSearch();
+});
+// remember which rows are open (toggle does not bubble, so listen in the capture phase)
+$('results').addEventListener('toggle', e => {
+  const k = e.target.dataset && e.target.dataset.key; if (!k) return;
+  e.target.open ? openSet.add(k) : openSet.delete(k);
+  updateToggleAll();
+}, true);
+
+$('results').addEventListener('click', async e => {
+  const btn = e.target.closest('[data-say], [data-learn], [data-edit]');
+  if (!btn) return;
+  const d = btn.dataset;
+  if (d.say) speak(d.say);
+  if (d.learn) {
+    btn.disabled = true;
+    try { await apiSetLearned(d.learn, d.val === '1'); openSet.add(d.learn.toLowerCase()); await runSearch(); }
+    catch (err) { btn.disabled = false; alert('Could not update: ' + err.message); }
+  }
+  if (d.edit) {
+    const rows = await apiSearch(d.edit);
+    const r = rows.find(x => x[W].toLowerCase() === d.edit.toLowerCase()); if (!r) return;
+    revealForEdit(r);
+    setMsg('Editing “' + d.edit + '”. Saving will update the existing row.');
+    $('f_word').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+});
+
+$('deckMode').addEventListener('change', () => startPractice());
+$('deckDir').addEventListener('change', () => startPractice());
+$('shuffleBtn').addEventListener('click', () => startPractice());
+$('stillBtn').addEventListener('click', () => answer(false));
+$('gotBtn').addEventListener('click', () => answer(true));
+$('practiceView').addEventListener('click', e => {
+  const sayBtn = e.target.closest('[data-say]');
+  if (sayBtn) { speak(sayBtn.dataset.say); return; }
+  if (e.target.id === 'restartBtn') { startPractice(); return; }
+  if (e.target.id === 'missedBtn') { startPractice(P.missed); return; }
+  if (e.target.closest('#card')) flip();
+});
+document.addEventListener('keydown', e => {
+  if ($('practiceView').hidden || $('settings').open) return;
+  if (e.target.closest && e.target.closest('button, select, input, textarea, a')) return;
+  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); flip(); }
+  else if (e.key === '1') answer(false);
+  else if (e.key === '2') answer(true);
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key !== '/' || $('wordsView').hidden || $('settings').open) return;
+  if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault();
+  $('q').focus();
+});
+
+$('openSettings').addEventListener('click', () => { $('apiUrl').value = apiUrl; $('settings').showModal(); });
+$('cancelSettings').addEventListener('click', () => $('settings').close());
+$('saveSettings').addEventListener('click', () => {
+  apiUrl = $('apiUrl').value.trim(); store.set('ordbok_api_url', apiUrl);
+  invalidateRowsCache();
+  $('settings').close(); renderModePill(); runSearch();
+});
+$('openPin').addEventListener('click', async () => {
+  const entered = await askPin();
+  if (entered != null) { appPin = entered; store.set('ordbok_pin', appPin); renderModePill(); }
+});
+
+renderModePill();
+runSearch();
+</script>
+</body>
+</html>
