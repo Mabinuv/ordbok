@@ -562,21 +562,56 @@ async function apiSearch(q) {
 }
 async function apiSave(row) {
   row[W] = row[W].toLowerCase();   // canonical, case-insensitive storage key
+  // Control metadata only — never a stored row field. Read it, then let the
+  // Demo-mode branch strip it before it touches localStorage; Connected mode
+  // still needs it on `row` a few lines down, to travel to the server as-is.
+  const previousWord = row.previousWord ? String(row.previousWord).trim().toLowerCase() : '';
   if (!apiUrl) {
+    delete row.previousWord;
     const rows = localRows();
-    const i = rows.findIndex(r => r[W].toLowerCase() === row[W].toLowerCase());
     row[GF] = row[GF] || '[]';
-    if (i >= 0) {
-      row[L] = rows[i][L] || '';
-      row[RS] = rows[i][RS] || '';
-      const merged = Array.from(new Set(parseSeenAs(rows[i][SEEN]).concat(parseSeenAs(row[SEEN]))));
-      row[SEEN] = JSON.stringify(merged);
-      rows[i] = row; saveLocalRows(rows); return 'updated';
+    let iNew = rows.findIndex(r => r[W].toLowerCase() === row[W].toLowerCase());
+    const iOld = (previousWord && previousWord !== row[W])
+      ? rows.findIndex(r => r[W].toLowerCase() === previousWord)
+      : -1;
+
+    if (iNew >= 0) {
+      let seen = parseSeenAs(rows[iNew][SEEN]).concat(parseSeenAs(row[SEEN]));
+      row[L] = rows[iNew][L] || '';
+      row[RS] = rows[iNew][RS] || '';
+      if (iOld >= 0 && iOld !== iNew) {
+        // True-duplicate cleanup: previousWord independently matches a
+        // DIFFERENT existing row (e.g. both "sakna" and "saknade" were
+        // already separately saved). Fold its history into the surviving
+        // new-word row, then drop it.
+        row[L] = row[L] || rows[iOld][L] || '';
+        row[RS] = row[RS] || rows[iOld][RS] || '';
+        seen = seen.concat(parseSeenAs(rows[iOld][SEEN]));
+        rows.splice(iOld, 1);
+        if (iOld < iNew) iNew -= 1;   // removed row shifts later indices down
+      }
+      row[SEEN] = JSON.stringify(Array.from(new Set(seen)));
+      rows[iNew] = row; saveLocalRows(rows); return 'updated';
     }
+
+    if (iOld >= 0) {
+      // Bug-fix path: no row for the new word yet, but the row this one used
+      // to be saved as still exists — rename/overwrite it in place so
+      // Learned/Review State/Seen As survive, instead of inserting a fresh,
+      // history-less duplicate row.
+      row[L] = rows[iOld][L] || '';
+      row[RS] = rows[iOld][RS] || '';
+      row[SEEN] = JSON.stringify(Array.from(new Set(
+        parseSeenAs(rows[iOld][SEEN]).concat(parseSeenAs(row[SEEN]))
+      )));
+      rows[iOld] = row; saveLocalRows(rows); return 'updated';
+    }
+
+    // Genuinely new word — unchanged from before.
     row[L] = ''; row[RS] = row[RS] || ''; row[SEEN] = row[SEEN] || '[]';
     rows.push(row); saveLocalRows(rows); return 'added';
   }
-  const action = (await post(row)).action;   // Learned/Review State are not sent, so the sheet keeps them
+  const action = (await post(row)).action;   // row.previousWord (if set) travels to the server as-is
   invalidateRowsCache();
   return action;
 }
@@ -873,6 +908,14 @@ async function save() {
     }
   } catch (e) { /* lookup failed — fall through and save as typed */ }
   if (currentSeenAs.length) row[SEEN] = JSON.stringify(currentSeenAs);
+
+  // If autofill (or a manual edit, or the dedupe-merge confirm above) changed
+  // the headword since this row was opened for editing, tell apiSave what it
+  // used to be saved as, so the OLD row gets renamed/merged instead of
+  // silently leaving a duplicate behind (see apiSave / doPost).
+  if (editingWord && editingWord.trim().toLowerCase() !== row[W].trim().toLowerCase()) {
+    row.previousWord = editingWord;
+  }
 
   const btn = $('saveBtn'); btn.disabled = true; setMsg('Saving…');
   try {

@@ -313,6 +313,24 @@ function safeParseArr_(s) {
   try { const a = JSON.parse(s || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; }
 }
 
+// Folds sourceRow's Learned/Review State/Seen As into targetRow before the
+// source row is deleted (true-duplicate merge only, in doPost's upsert).
+// Seen As is unioned; Learned/Review State keep target's value if it already
+// has one, else fall back to source's.
+function mergeRowInto_(sh, map, targetRow, sourceRow) {
+  ['Learned', 'Review State', 'Seen As'].forEach(h => {
+    const c = map[h]; if (!c) return;
+    const targetCell = sh.getRange(targetRow, c);
+    const sourceVal = sh.getRange(sourceRow, c).getValue();
+    if (h === 'Seen As') {
+      const merged = Array.from(new Set(safeParseArr_(targetCell.getValue()).concat(safeParseArr_(sourceVal))));
+      targetCell.setValue(JSON.stringify(merged));
+    } else if (!String(targetCell.getValue()).trim()) {
+      targetCell.setValue(sourceVal);
+    }
+  });
+}
+
 // Best-effort Swedish suffix stripper, used only as a fallback for older rows
 // that have no "Grammar Forms" saved yet. Longer/more specific suffixes are
 // tried first. Deliberately has NO single-letter suffixes (no bare "n", "t",
@@ -433,11 +451,36 @@ function doPost(e) {
 
     const word = String(data['Swedish Word'] || '').trim();
     if (!word) return json_({ ok: false, error: 'Swedish Word is required' });
-
-    const existingRow = findRow_(sh, word);
+    // Control field only — the word this row used to be saved as, when a
+    // regenerate/edit changed the headword. Never one of HEADERS, so the
+    // HEADERS.forEach overlay below can never write it into a cell.
+    const previousWord = String(data.previousWord || '').trim();
     const lastCol = sh.getLastColumn();
-    const rowValues = existingRow > 0
-      ? sh.getRange(existingRow, 1, 1, lastCol).getValues()[0]
+
+    // (a) a row exists for the NEW word -> update it, merging in and deleting
+    // any different row previousWord also matches (true-duplicate cleanup).
+    // (b) no row for the new word, but previousWord matches an existing row ->
+    // rename/overwrite that row in place (the bug-fix path: e.g. regenerating
+    // "saknade" into its dictionary form "sakna" must not orphan the old row).
+    // (c) neither -> insert a new row, same as today.
+    let targetRow = findRow_(sh, word);
+
+    if (targetRow > 0) {
+      if (previousWord && norm_(previousWord) !== norm_(word)) {
+        const priorRow = findRow_(sh, previousWord);
+        if (priorRow > 0 && priorRow !== targetRow) {
+          mergeRowInto_(sh, map, targetRow, priorRow);
+          sh.deleteRow(priorRow);
+          if (priorRow < targetRow) targetRow -= 1;   // rows below a deleted row shift up
+        }
+      }
+    } else if (previousWord) {
+      const priorRow = findRow_(sh, previousWord);
+      if (priorRow > 0) targetRow = priorRow;
+    }
+
+    const rowValues = targetRow > 0
+      ? sh.getRange(targetRow, 1, 1, lastCol).getValues()[0]
       : new Array(lastCol).fill('');
 
     HEADERS.forEach(h => {
@@ -459,8 +502,8 @@ function doPost(e) {
       }
     });
 
-    if (existingRow > 0) {
-      sh.getRange(existingRow, 1, 1, lastCol).setValues([rowValues]);
+    if (targetRow > 0) {
+      sh.getRange(targetRow, 1, 1, lastCol).setValues([rowValues]);
       invalidateCache_();
       return json_({ ok: true, action: 'updated' });
     }
