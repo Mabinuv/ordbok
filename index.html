@@ -174,8 +174,19 @@
 
   /* ---------- Read view ---------- */
   #readingView { max-width: 720px; margin: 0 auto; }
-  .rd-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .rd-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 12px; margin-bottom: 14px; }
   .rd-head h2 { font: 600 22px/1.2 var(--serif); margin: 0; }
+  .rd-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 14px; }
+  .rd-controls label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  .rd-controls select { width: auto; padding: 5px 8px; font-size: 14px; }
+  #readingHistory { margin-top: 22px; font-size: 14px; }
+  #readingHistory summary { cursor: pointer; color: var(--muted); font-weight: 500; }
+  #readingHistoryList { list-style: none; margin: 10px 0 0; padding: 0; }
+  #readingHistoryList li { border-bottom: 1px solid var(--line); }
+  #readingHistoryList button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 8px 4px; color: inherit; font: inherit; cursor: pointer; }
+  #readingHistoryList button:hover, #readingHistoryList button:focus-visible { background: color-mix(in srgb, var(--lake) 8%, transparent); }
+  #readingHistoryList button[aria-current="true"] { font-weight: 600; }
+  #readingHistoryList .rd-when { color: var(--muted); margin-right: 8px; }
   .rd-passage { font: 400 19px/1.65 var(--serif); }
   .rd-passage p { margin: 0 0 14px; }
   .rd-passage p:last-child { margin-bottom: 0; }
@@ -364,9 +375,18 @@
   <div id="readingView" hidden>
     <div class="rd-head">
       <h2>Today's reading</h2>
-      <button class="link" id="readingRegenBtn" type="button" hidden>Generate a new passage</button>
+      <div class="rd-controls">
+        <label>Words: <select id="readingCount">
+          <option>4</option><option>6</option><option>8</option><option>10</option><option>12</option><option>15</option>
+        </select></label>
+        <button class="link" id="readingRegenBtn" type="button" hidden>Generate a new passage</button>
+      </div>
     </div>
     <div id="readingBody" aria-live="polite"></div>
+    <details id="readingHistory" hidden>
+      <summary>Past passages</summary>
+      <ul id="readingHistoryList"></ul>
+    </details>
   </div>
 
   <button id="addFab" class="fab" type="button" hidden aria-label="Add a word">+</button>
@@ -417,7 +437,8 @@ const ICON_UNDO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 /* ---------- storage helpers (guarded: storage can be unavailable) ---------- */
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  remove(k) { try { localStorage.removeItem(k); } catch (e) {} }
 };
 let apiUrl = store.get('ordbok_api_url', '');
 let appPin = store.get('ordbok_pin', '');
@@ -962,17 +983,50 @@ function nextReviewState(state, knew) {
 }
 
 /* ================= READ VIEW ================= */
-// A daily AI-generated passage that naturally uses today's due words, so
-// they're seen several times in context instead of in isolation. Generated
-// at most once per calendar day (cached in localStorage) — regeneration is
-// opt-in via the "Generate a new passage" button.
+// A daily AI-generated passage that naturally uses a random subset of today's
+// due words (size picked via #readingCount), so they're seen several times in
+// context instead of in isolation. Generated automatically at most once per
+// calendar day — "Generate a new passage" draws a fresh random subset. Every
+// passage is kept in a local, device-only history (newest first, capped).
 const READING_MIN_WORDS = 4;
-const READING_MAX_WORDS = 10;
+const READING_COUNT_OPTIONS = [4, 6, 8, 10, 12, 15];
+const READING_COUNT_DEFAULT = 10;
+const READING_HISTORY_MAX = 20;
 
-function loadReadingCache() {
-  try { return JSON.parse(store.get('ordbok_reading', 'null')); } catch (e) { return null; }
+function readingCount() {
+  const n = parseInt(store.get('ordbok_reading_count', ''), 10);
+  return READING_COUNT_OPTIONS.includes(n) ? n : READING_COUNT_DEFAULT;
 }
-function saveReadingCache(entry) { store.set('ordbok_reading', JSON.stringify(entry)); }
+
+function loadReadingHistory() {
+  const h = safeJson(store.get('ordbok_reading_history', ''), []);
+  if (Array.isArray(h) && h.length) return h;
+  // One-time migration from the old single-entry daily cache.
+  const legacy = safeJson(store.get('ordbok_reading', ''), null);
+  if (legacy && legacy.text) {
+    const seeded = [Object.assign({ id: legacy.date || new Date().toISOString() }, legacy)];
+    saveReadingHistory(seeded);
+    store.remove('ordbok_reading');
+    return seeded;
+  }
+  return [];
+}
+function saveReadingHistory(h) { store.set('ordbok_reading_history', JSON.stringify(h.slice(0, READING_HISTORY_MAX))); }
+
+// Id of the passage currently on screen, so the history list can mark it.
+let readingCurrentId = null;
+
+function renderReadingHistory() {
+  const h = loadReadingHistory();
+  $('readingHistory').hidden = !h.length;
+  $('readingHistoryList').innerHTML = h.map(e => {
+    const d = new Date(e.id);
+    const when = isNaN(d) ? (e.date || '') : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    const preview = (e.words || []).slice(0, 5).join(', ') + ((e.words || []).length > 5 ? '…' : '');
+    return '<li><button type="button" data-id="' + esc(e.id) + '"' + (e.id === readingCurrentId ? ' aria-current="true"' : '') + '>' +
+      '<span class="rd-when">' + esc(when) + '</span>' + esc(preview) + '</button></li>';
+  }).join('');
+}
 
 // Tokenizes the (already-esc()'d) Swedish text and wraps any word run that
 // matches one of `rows`' headword, saved Grammar Forms, or Seen As entries —
@@ -1025,8 +1079,10 @@ function renderReadingError(message) {
   $('readingRegenBtn').hidden = false;
   $('readingBody').innerHTML = '<div class="empty">Could not generate a reading passage: ' + esc(message) + '</div>';
 }
-async function renderReadingPassage(entry) {
-  $('readingRegenBtn').hidden = false;
+async function renderReadingPassage(entry, isPast) {
+  $('readingRegenBtn').hidden = !apiUrl;
+  readingCurrentId = entry.id;
+  renderReadingHistory();
   let allRows = [];
   try { allRows = await fetchAllRows(false); } catch (e) { /* fall back to headword-only rows below */ }
   // Words edited/deleted since this passage was generated still get
@@ -1034,33 +1090,45 @@ async function renderReadingPassage(entry) {
   const rows = entry.words.map(w =>
     allRows.find(r => r[W].toLowerCase() === w.toLowerCase()) || { [W]: w, [GF]: '[]', [SEEN]: '[]' });
   const { html, matched } = buildReadingHtml(entry.text, rows);
+  let caption = matched.length + ' of the ' + entry.words.length + ' words picked for this passage appear above — tap one to open it.';
+  if (entry.requested > entry.words.length) {
+    caption += ' Only ' + entry.words.length + ' words were due, so all of them were used.';
+  }
+  if (isPast) {
+    const d = new Date(entry.id);
+    caption = 'Past passage from ' + (isNaN(d) ? entry.date : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })) + '. ' + caption;
+  }
   $('readingBody').innerHTML =
     '<div class="panel rd-passage" lang="sv">' + html + '</div>' +
-    '<p class="rd-caption">' + matched.length + ' of your ' + entry.words.length + ' due words appear above — tap one to open it.</p>';
+    '<p class="rd-caption">' + esc(caption) + '</p>';
 }
 
 async function startReading(force) {
-  if (!apiUrl) { renderReadingEmpty('demo'); return; }
-  const cached = !force && loadReadingCache();
-  if (cached && cached.date === todayStr() && cached.apiUrl === apiUrl) {
-    await renderReadingPassage(cached);
+  const history = loadReadingHistory();
+  const latest = history[0];
+  if (!force && latest && latest.date === todayStr() && latest.apiUrl === apiUrl) {
+    await renderReadingPassage(latest);
     return;
   }
+  readingCurrentId = null;
+  renderReadingHistory();
+  if (!apiUrl) { renderReadingEmpty('demo'); return; }
   let dueRows;
   try {
     const rows = await apiSearch('');
     dueRows = rows.filter(r => reviewState(r).due <= todayStr());
   } catch (e) { renderReadingError(e.message); return; }
   if (dueRows.length < READING_MIN_WORDS) { renderReadingEmpty('few', dueRows.length); return; }
-  const picked = dueRows.slice()
-    .sort((a, b) => reviewState(a).due.localeCompare(reviewState(b).due))
-    .slice(0, READING_MAX_WORDS);
-  const words = picked.map(r => r[W]);
+  const requested = readingCount();
+  const words = shuffle(dueRows.slice()).slice(0, requested).map(r => r[W]);
   renderReadingLoading();
   try {
     const data = await post({ action: 'generateReading', words });
-    const entry = { date: todayStr(), apiUrl, words, text: data.text || '', wordsUsed: Array.isArray(data.wordsUsed) ? data.wordsUsed : [] };
-    saveReadingCache(entry);
+    const entry = {
+      id: new Date().toISOString(), date: todayStr(), apiUrl, requested, words,
+      text: data.text || '', wordsUsed: Array.isArray(data.wordsUsed) ? data.wordsUsed : []
+    };
+    saveReadingHistory([entry].concat(loadReadingHistory()));
     await renderReadingPassage(entry);
   } catch (e) { renderReadingError(e.message); }
 }
@@ -1307,6 +1375,17 @@ $('results').addEventListener('click', async e => {
 });
 
 $('readingRegenBtn').addEventListener('click', () => startReading(true));
+$('readingCount').value = String(readingCount());
+$('readingCount').addEventListener('change', e => store.set('ordbok_reading_count', e.target.value));
+$('readingHistoryList').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-id]');
+  if (!btn) return;
+  const h = loadReadingHistory();
+  const entry = h.find(x => x.id === btn.dataset.id);
+  if (!entry) return;
+  renderReadingPassage(entry, entry !== h[0]);
+  $('readingView').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 $('readingBody').addEventListener('click', e => {
   const span = e.target.closest('.rd-word');
   if (span) jumpToWord(span.dataset.word);
