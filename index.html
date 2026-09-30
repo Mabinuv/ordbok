@@ -1718,23 +1718,69 @@ function fmtDate(iso) {
   return isNaN(d) ? '' : d.toLocaleDateString(undefined, { dateStyle: 'medium' });
 }
 
-// Called from setView('reading') — only ever re-renders the current screen,
-// never generates. Coming back to the tab (e.g. from Search) re-shows
-// whichever screen was last active rather than resetting to the library.
+// ---- Hash-based deep-linking, scoped only to this tab ----
+// #read, #read/new, #read/<id>, #read/<id>/quiz. Purely additive: no other
+// tab reads or writes location.hash, and these hashes never reach the
+// server (a static-file host never sees the fragment), so this needs no
+// Vercel/routing config. Every goTo*/backToReading call below pushes its own
+// state (push=false suppresses it when the navigation came FROM a hash
+// change in the first place, to avoid a push loop).
+function pushReadState(hash) {
+  if (location.hash === hash) return;
+  history.pushState({ read: true }, '', hash);
+}
+window.addEventListener('popstate', () => {
+  if (location.hash.startsWith('#read')) setView('reading');
+});
+// Re-derives R.screen/R.current from the current hash. Reuses R.current
+// without re-fetching when it already matches the hash's id (e.g. switching
+// tabs away and back), so this is cheap except on an actual deep-link/refresh.
+function syncReadScreenFromHash() {
+  const parts = location.hash.slice(1).split('/');   // 'read' -> ['read']; 'read/new' -> ['read','new']; 'read/<id>[/quiz]'
+  if (parts.length <= 1) { goToLibrary(false); return; }
+  if (parts[1] === 'new') { goToSetup(false); return; }
+  const id = decodeURIComponent(parts[1]);
+  const wantQuiz = parts[2] === 'quiz';
+  if (R.current && R.current.id === id) {
+    if (wantQuiz && R.current.quiz.length) { R.screen = 'quiz'; R.quizIndex = 0; R.quizChoice = null; renderReadQuiz(); }
+    else { R.screen = 'reading'; renderReadReading(R.current); }
+    return;
+  }
+  goToReading(id, false).then(() => {
+    if (wantQuiz && R.current && R.current.id === id && R.current.quiz.length) {
+      R.screen = 'quiz'; R.quizIndex = 0; R.quizChoice = null; renderReadQuiz();
+    }
+  });
+}
+
+// Called from setView('reading') — only ever re-renders a screen, never
+// generates. A deep-link hash (other than the bare library one) wins over
+// whatever was already showing; otherwise resumes wherever the session was,
+// same as before hash-routing existed (e.g. coming back to the tab from Search).
 function enterReadTab() {
-  if (R.screen === 'reading' && R.current) renderReadReading(R.current);
-  else if (R.screen === 'quiz' && R.current && R.current.quiz.length) renderReadQuiz();
+  if (location.hash.startsWith('#read') && location.hash !== '#read') { syncReadScreenFromHash(); return; }
+  if (R.screen === 'reading' && R.current) { pushReadState('#read/' + encodeURIComponent(R.current.id)); renderReadReading(R.current); }
+  else if (R.screen === 'quiz' && R.current && R.current.quiz.length) {
+    pushReadState('#read/' + encodeURIComponent(R.current.id) + '/quiz'); renderReadQuiz();
+  }
   else if (R.screen === 'results' && R.current) backToReading();   // mid-results on tab-away/back: just resume reading
-  else if (R.screen === 'setup' && apiUrl) renderReadSetup();
+  else if (R.screen === 'setup' && apiUrl) goToSetup();
   else goToLibrary();
 }
-function goToLibrary() { R.screen = 'library'; renderReadLibrary(); }
-function goToSetup() {
-  if (!apiUrl) { goToLibrary(); return; }   // generation needs Connected mode
-  R.screen = 'setup'; renderReadSetup();
+function goToLibrary(push) {
+  R.screen = 'library';
+  if (push !== false) pushReadState('#read');
+  renderReadLibrary();
 }
-async function goToReading(id) {
+function goToSetup(push) {
+  if (!apiUrl) { goToLibrary(push); return; }   // generation needs Connected mode
+  R.screen = 'setup';
+  if (push !== false) pushReadState('#read/new');
+  renderReadSetup();
+}
+async function goToReading(id, push) {
   R.screen = 'reading';
+  if (push !== false) pushReadState('#read/' + encodeURIComponent(id));
   $('readingBody').innerHTML = '<p class="empty">Loading…</p>';
   try {
     const row = await apiGetPassage(id);
@@ -1992,12 +2038,17 @@ async function saveWordFromPanel(lemma, surface, pidx) {
 }
 
 // ---- Quiz + results ----
-function goToQuiz() {
+function goToQuiz(push) {
   if (!R.current || !R.current.quiz.length) return;
   R.screen = 'quiz'; R.quizIndex = 0; R.quizChoice = null; R.quizCorrect = 0; R.quizMissedLemmas = [];
+  if (push !== false) pushReadState('#read/' + encodeURIComponent(R.current.id) + '/quiz');
   renderReadQuiz();
 }
-function backToReading() { R.screen = 'reading'; renderReadReading(R.current); }
+function backToReading(push) {
+  R.screen = 'reading';
+  if (push !== false && R.current) pushReadState('#read/' + encodeURIComponent(R.current.id));
+  renderReadReading(R.current);
+}
 function renderReadQuiz() {
   const passage = R.current;
   const total = passage.quiz.length;
@@ -2613,7 +2664,9 @@ $('openPinFromSettings').addEventListener('click', async () => {
 
 renderModePill();
 renderThemeBtn();
-setView('search');
+// A #read/... deep link (shared/bookmarked/refreshed) opens straight into
+// the Read tab at that screen instead of the usual Search default.
+setView(location.hash.startsWith('#read') ? 'reading' : 'search');
 migratePassagesIfNeeded();   // fire-and-forget; see its own comment above
 </script>
 </body>
