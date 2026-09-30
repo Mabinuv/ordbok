@@ -38,9 +38,12 @@ applyTheme(store.get('ordbok_theme', ''));
     --on-highlight: #1f2a33;
     --c-noun: #005b99; --c-verb: #2e7d4f; --c-adj: #8f5f00; --c-adv: #6d4ab0; --c-other: #5e6a73;
     --c-en: #005b99; --c-ett: #b42318;
+    --sand: #f1eee6;           /* tonal step above --card — Read library cards, chips */
+    --border-strong: #d5d0c4;  /* a bit more contrast than --line, for the Read side panel divider */
     --shadow: 0 1px 2px rgba(31,42,51,.06), 0 4px 14px rgba(31,42,51,.07);
     --backdrop: rgba(20,28,34,.45);
     --radius: 12px;
+    --radius-lg: 18px;         /* Read library/passage cards only — not a color, so (like --radius) never redeclared below */
     --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
     --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
     --tabbar-h: 0px;
@@ -52,6 +55,7 @@ applyTheme(store.get('ordbok_theme', ''));
       --line: #2b414e; --lake: #7cc0e3; --berry: #ff8fa3; --ok: #7fd1a0; --on-lake: #0f1b23; --highlight: #e0b872;
       --c-noun: #7cc0e3; --c-verb: #7fd1a0; --c-adj: #e0b872; --c-adv: #c3a6ff; --c-other: #93a8b6;
       --c-en: #7cc0e3; --c-ett: #ff8fa3;
+      --sand: #1c2932; --border-strong: #3a5362;
       --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
       --backdrop: rgba(0,0,0,.6);
       color-scheme: dark;
@@ -62,6 +66,7 @@ applyTheme(store.get('ordbok_theme', ''));
     --line: #2b414e; --lake: #7cc0e3; --berry: #ff8fa3; --ok: #7fd1a0; --on-lake: #0f1b23; --highlight: #e0b872;
     --c-noun: #7cc0e3; --c-verb: #7fd1a0; --c-adj: #e0b872; --c-adv: #c3a6ff; --c-other: #93a8b6;
     --c-en: #7cc0e3; --c-ett: #ff8fa3;
+    --sand: #1c2932; --border-strong: #3a5362;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
     --backdrop: rgba(0,0,0,.6);
     color-scheme: dark;
@@ -304,30 +309,50 @@ applyTheme(store.get('ordbok_theme', ''));
   .done .row2 button { min-height: 44px; padding: 10px 16px; border-radius: var(--radius); border: 1px solid var(--lake); background: var(--card); color: var(--lake); font-weight: 600; }
 
   /* ---------- Read view ---------- */
-  #readingView { max-width: 720px; margin: 0 auto; }
+  #readingView { max-width: 960px; margin: 0 auto; }
   .panel { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; }
-  .rd-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-bottom: 16px; }
-  .rd-head h2 { font: 600 22px/1.2 var(--sans); margin: 0; }
-  .rd-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 14px; }
-  .rd-controls label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); margin: 0; }
-  .rd-controls select { width: auto; padding: 6px 10px; font-size: 14px; }
-  #readingHistory { margin-top: 24px; font-size: 14px; }
-  #readingHistory summary { cursor: pointer; color: var(--muted); font-weight: 500; min-height: 44px; display: flex; align-items: center; }
-  #readingHistoryList { list-style: none; margin: 8px 0 0; padding: 0; }
-  #readingHistoryList li { border-bottom: 1px solid var(--line); }
-  #readingHistoryList button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 12px 4px; color: inherit; font: inherit; cursor: pointer; }
-  #readingHistoryList button:hover, #readingHistoryList button:focus-visible { background: color-mix(in srgb, var(--lake) 8%, transparent); }
-  #readingHistoryList button[aria-current="true"] { font-weight: 600; }
-  #readingHistoryList .rd-when { color: var(--muted); margin-right: 8px; }
-  .rd-passage { font: 400 19px/1.65 var(--serif); }
+  .rd-passage { font: 400 19px/1.65 var(--serif); border-radius: var(--radius-lg); }
+  .rd-passage h2 { font: 600 28px var(--serif); margin: 0 0 4px; }
   .rd-passage p { margin: 0 0 16px; }
   .rd-passage p:last-child { margin-bottom: 0; }
-  .rd-word { cursor: pointer; color: var(--lake); text-decoration: underline dotted; text-underline-offset: 3px; border-radius: 3px; }
+  /* A real <button> per word (accessibility), reset to still read as plain
+     inline text — same visual language the old span-based version used. */
+  .rd-word { all: unset; display: inline; cursor: pointer; color: var(--lake); text-decoration: underline dotted; text-underline-offset: 3px; border-radius: 3px; }
   .rd-word:hover, .rd-word:focus-visible { background: color-mix(in srgb, var(--lake) 14%, transparent); }
-  .rd-caption { color: var(--muted); font-size: 14px; margin: 16px 0 0; }
+  .rd-caption { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
   .rd-loading-note { font: 500 15px var(--sans); color: var(--muted); margin: 0 0 16px; }
   .rd-skeleton-line { height: 18px; border-radius: 4px; margin-bottom: 10px; background: var(--line); }
   .rd-skeleton-line:last-child { width: 60%; margin-bottom: 0; }
+  .rd-cancel-btn { margin-top: 16px; min-height: 44px; padding: 0 16px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 600; cursor: pointer; }
+
+  /* Library screen */
+  .rd-lib-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 16px; margin-bottom: 20px; }
+  .rd-lib-head h2 { font: 600 28px var(--serif); margin: 0 0 4px; }
+  .rd-lib-sub { color: var(--muted); margin: 0; max-width: 520px; }
+  .rd-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+  .rd-pills button { min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 500; cursor: pointer; }
+  .rd-pills button[aria-pressed="true"] { background: var(--lake); border-color: var(--lake); color: var(--on-lake); font-weight: 600; }
+  .rd-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+  .rd-lib-card { text-align: left; display: flex; flex-direction: column; gap: 10px; background: var(--card); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px; cursor: pointer; color: inherit; border: 0; font: inherit; }
+  .rd-lib-card:hover, .rd-lib-card:focus-visible { box-shadow: 0 1px 2px rgba(31,42,51,.06), 0 8px 20px rgba(31,42,51,.12); }
+  .rd-lib-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .rd-lib-title { font: 600 20px var(--serif); line-height: 1.25; }
+  .rd-lib-meta { color: var(--muted); font-size: 14px; }
+
+  /* Setup screen */
+  .rd-setup { max-width: 560px; margin: 16px auto 0; display: flex; flex-direction: column; gap: 16px; }
+  .rd-setup h2 { font: 600 24px var(--serif); margin: 0; }
+  .rd-setup select { width: auto; padding: 6px 10px; font-size: 14px; margin-left: 8px; }
+  .rd-setup-actions { display: flex; gap: 10px; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 16px; }
+  .rd-setup-actions button { min-height: 44px; padding: 0 18px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 600; cursor: pointer; }
+  .rd-setup-actions button.primary { border-color: var(--lake); }
+
+  /* Reading screen: two columns on desktop, stacked on mobile */
+  .rd-reading-layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  .rd-reading-layout .rd-passage { flex: 1 1 560px; min-width: 0; }
+  .rd-panel { flex: 0 1 320px; min-width: 260px; position: sticky; top: 16px; background: var(--card); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px; }
+  .rd-panel-close { float: right; width: 36px; height: 36px; border-radius: var(--radius); border: 0; background: var(--sand); color: var(--ink); cursor: pointer; }
+  .rd-panel-word { font: 600 26px var(--serif); margin: 0 8px 12px 0; clear: both; }
 
   /* ---------- Dialogs ---------- */
   dialog { border: 0; border-radius: var(--radius); background: var(--card); color: var(--ink); box-shadow: var(--shadow); max-width: 520px; width: calc(100% - 32px); padding: 24px; }
@@ -499,21 +524,11 @@ applyTheme(store.get('ordbok_theme', ''));
   </div>
 
   <!-- ===================== READ ===================== -->
+  <!-- All six screens (library/setup/loading/reading/quiz/results) render
+       entirely inside #readingBody — see the "Read tab screens" JS section —
+       so this shell never changes and carries no screen-specific markup. -->
   <div id="readingView" hidden>
-    <div class="rd-head">
-      <h2>Today's reading</h2>
-      <div class="rd-controls">
-        <label>Words: <select id="readingCount">
-          <option>4</option><option>6</option><option>8</option><option>10</option><option>12</option><option>15</option>
-        </select></label>
-        <button class="link" id="readingRegenBtn" type="button" hidden>Generate a new passage</button>
-      </div>
-    </div>
     <div id="readingBody" aria-live="polite"></div>
-    <details id="readingHistory" hidden>
-      <summary>Past passages</summary>
-      <ul id="readingHistoryList"></ul>
-    </details>
   </div>
 </div>
 
@@ -733,6 +748,12 @@ async function apiListPassages(force) {
   const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'passages=1');
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || 'Could not load passages');
+  // A connected Apps Script deployment that hasn't been updated with the
+  // Passages support yet answers ?passages=1 as a plain (ignored) search
+  // param — { ok:true, rows:[...] }, no `passages` key — rather than an
+  // error. Catch that here with a clear message instead of quietly handing
+  // callers `undefined` (which used to crash renderLibraryGrid()).
+  if (!Array.isArray(data.passages)) throw new Error('This Google Sheet’s script needs updating to the latest code.gs to support reading passages.');
   allPassagesCache = data.passages; allPassagesCacheAt = Date.now();
   return allPassagesCache;
 }
@@ -744,6 +765,16 @@ async function apiGetPassage(id) {
   const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'passage=' + encodeURIComponent(id));
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || 'Passage not found');
+  if (!data.passage || typeof data.passage !== 'object') throw new Error('This Google Sheet’s script needs updating to the latest code.gs to support reading passages.');
+  return data.passage;
+}
+// No demo-mode fallback: Demo mode has no AI auto-fill (see apiSave et al.
+// elsewhere) and likewise no passage generation — the Read library's empty
+// state points at Settings instead of calling this.
+async function apiGeneratePassage(words, level, signal) {
+  if (!apiUrl) throw new Error('Connect a Google Sheet to generate reading passages.');
+  const data = await post({ action: 'generatePassage', words, level }, false, signal);
+  invalidatePassagesCache();
   return data.passage;
 }
 
@@ -793,17 +824,24 @@ function askPin(errorText) {
     $('pinInput').addEventListener('keydown', onKey);
   });
 }
-async function post(body, isRetry) {
+// `signal` is optional and new (added for apiGeneratePassage's Cancel
+// button) — every other caller passes only `body` (or `body, isRetry` for
+// the PIN-retry recursion below), so `signal` is just `undefined` for them
+// and fetch treats that as "no signal", same as not passing the option at
+// all. This is the app's first AbortController use; existing cancellation
+// elsewhere (e.g. lookupWord's lookupSeq) uses a sequence-number guard
+// instead, since most requests here are cheap enough not to need a real abort.
+async function post(body, isRetry, signal) {
   // text/plain avoids a CORS preflight, which Apps Script cannot answer
   const payload = appPin ? Object.assign({}, body, { pin: appPin }) : body;
-  const res = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
+  const res = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), signal });
   const data = await res.json();
   if (!data.ok && /pin/i.test(data.error || '') && !isRetry) {
     const entered = await askPin(data.error === 'Incorrect PIN' ? 'That PIN was not correct. Try again.' : '');
     if (entered == null) throw new Error(data.error || 'Request failed');
     appPin = entered; store.set('ordbok_pin', appPin);
     renderModePill();
-    return post(body, true);
+    return post(body, true, signal);
   }
   if (!data.ok) throw new Error(data.error || 'Request failed');
   return data;
@@ -1467,11 +1505,14 @@ function nextReviewState(state, knew) {
 }
 
 /* ================= READ VIEW ================= */
-// A daily AI-generated passage that naturally uses a random subset of today's
-// due words (size picked via #readingCount), so they're seen several times in
-// context instead of in isolation. Generated automatically at most once per
-// calendar day — "Generate a new passage" draws a fresh random subset. Every
-// passage is kept in a local, device-only history (newest first, capped).
+// An AI-generated passage that naturally uses a random subset of the user's
+// due words (size picked on the Setup screen, default READING_COUNT_DEFAULT),
+// so they're seen several times in context instead of in isolation. Unlike
+// the old version of this feature, generation happens ONLY on the explicit
+// "Generate passage" button (see handleGenerate below, and the Read tab
+// screens section further down) — never on tab switch or a timer. Every
+// passage is saved server-side (Passages sheet tab) in Connected mode, or
+// kept in a local history in Demo mode (read-only, migrated passages only).
 const READING_MIN_WORDS = 4;
 const READING_COUNT_OPTIONS = [4, 6, 8, 10, 12, 15];
 const READING_COUNT_DEFAULT = 10;
@@ -1516,11 +1557,10 @@ const PASSAGES_MIGRATED_KEY = 'ordbok_passages_migrated';
 const DEMO_PASSAGES_KEY = 'ordbok_demo_passages';
 
 // Re-locates each `wordsUsed` entry from a legacy history entry inside its
-// own paragraphs (an exact-or-stemmed match, same idea as clientMatches/
-// buildReadingHtml use elsewhere, just scanning one word at a time rather
-// than building a highlight map) to derive a Targets array with a surface +
-// paragraphIndex. A word that can't be re-located (edited/deleted since) is
-// dropped, not guessed.
+// own paragraphs (an exact-or-stemmed match, same idea as clientMatches uses
+// elsewhere, just scanning one word at a time rather than building a
+// highlight map) to derive a Targets array with a surface + paragraphIndex.
+// A word that can't be re-located (edited/deleted since) is dropped, not guessed.
 function legacyPassageTargets_(paragraphs, wordsUsed, allRows) {
   const targets = [];
   (wordsUsed || []).forEach(w => {
@@ -1604,131 +1644,225 @@ async function migratePassagesIfNeeded() {
   try { await migrateConnectedPassages_(); } catch (e) { /* retry on next launch */ }
 }
 
-// Id of the passage currently on screen, so the history list can mark it.
-let readingCurrentId = null;
+// ---- Read tab screens: library -> setup -> loading -> reading (-> quiz ->
+// results, phase 4). Replaces the old auto-generating single-page Read tab:
+// setView('reading') now only ever renders whichever screen R.screen already
+// is (see enterReadTab) — it never itself calls apiGeneratePassage, which is
+// the fix for the old startReading() being triggered on every tab switch.
+const R = {
+  screen: 'library',     // 'library' | 'setup' | 'loading' | 'reading' | 'quiz' | 'results'
+  passages: [],          // light list from apiListPassages()
+  libFilter: 'all',       // 'all' | 'open' | 'quizzed'
+  current: null,          // full parsed Passage (parsePassage), for reading/quiz/results
+  setup: { count: readingCount(), level: store.get('ordbok_reading_level', '') || 'A2' },
+  abort: null,            // AbortController for an in-flight apiGeneratePassage call
+};
 
-function renderReadingHistory() {
-  const h = loadReadingHistory();
-  $('readingHistory').hidden = !h.length;
-  $('readingHistoryList').innerHTML = h.map(e => {
-    const d = new Date(e.id);
-    const when = isNaN(d) ? (e.date || '') : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-    const preview = (e.words || []).slice(0, 5).join(', ') + ((e.words || []).length > 5 ? '…' : '');
-    return '<li><button type="button" data-id="' + esc(e.id) + '"' + (e.id === readingCurrentId ? ' aria-current="true"' : '') + '>' +
-      '<span class="rd-when">' + esc(when) + '</span>' + esc(preview) + '</button></li>';
+// Converts one raw sheet-shaped passage row (JSON-string fields, see
+// PASSAGE_COLS) into a JS object with those fields parsed — the shape every
+// screen render function below works with.
+function parsePassage(row) {
+  return {
+    id: row[PID], created: row[PCREATED], status: row[PSTATUS], title: row[PTITLE] || 'Reading passage',
+    level: row[PLEVEL], wordCount: row[PWORDCOUNT],
+    paragraphs: safeJson(row[PPARAS], []),
+    targets: safeJson(row[PTARGETS], []),
+    quiz: safeJson(row[PQUIZ], []),
+    requestedWords: safeJson(row[PREQ], []),
+    openedWords: safeJson(row[POPENED], []),
+    quizResult: row[PQUIZRESULT] ? safeJson(row[PQUIZRESULT], null) : null,
+    source: row[PSOURCE],
+  };
+}
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleDateString(undefined, { dateStyle: 'medium' });
+}
+
+// Called from setView('reading') — only ever re-renders the current screen,
+// never generates. Coming back to the tab (e.g. from Search) re-shows
+// whichever screen was last active rather than resetting to the library.
+function enterReadTab() {
+  if (R.screen === 'reading' && R.current) renderReadReading(R.current);
+  else if (R.screen === 'setup' && apiUrl) renderReadSetup();
+  else goToLibrary();
+}
+function goToLibrary() { R.screen = 'library'; renderReadLibrary(); }
+function goToSetup() {
+  if (!apiUrl) { goToLibrary(); return; }   // generation needs Connected mode
+  R.screen = 'setup'; renderReadSetup();
+}
+async function goToReading(id) {
+  R.screen = 'reading';
+  $('readingBody').innerHTML = '<p class="empty">Loading…</p>';
+  try {
+    const row = await apiGetPassage(id);
+    if (!row) throw new Error('Passage not found');
+    R.current = parsePassage(row);
+    renderReadReading(R.current);
+  } catch (e) {
+    $('readingBody').innerHTML = '<div class="empty">Could not open this passage: ' + esc(e.message) + '</div>' +
+      '<button type="button" class="link" data-action="to-library">← All passages</button>';
+  }
+}
+
+async function renderReadLibrary() {
+  $('readingBody').innerHTML =
+    '<div class="rd-lib-head"><div><h2>Read</h2><p class="rd-lib-sub">Short stories written around your own words. ' +
+    'A new one is only created when you ask, and every passage stays saved here.</p></div>' +
+    '<button type="button" class="primary" data-action="new-passage">+ New passage</button></div>' +
+    '<div class="rd-pills" role="group" aria-label="Filter passages">' +
+    [['all', 'All'], ['open', 'Not quizzed'], ['quizzed', 'Quizzed']].map(([f, label]) =>
+      '<button type="button" data-action="lib-filter" data-filter="' + f + '" aria-pressed="' + (R.libFilter === f) + '">' + label + '</button>'
+    ).join('') +
+    '</div><div id="rdLibGrid" class="rd-lib-grid"><p class="empty">Loading your passages…</p></div>';
+  try {
+    R.passages = await apiListPassages(false);
+  } catch (e) {
+    $('rdLibGrid').innerHTML = '<div class="empty">Could not load passages: ' + esc(e.message) + '</div>';
+    return;
+  }
+  renderLibraryGrid();
+}
+function renderLibraryGrid() {
+  const grid = $('rdLibGrid'); if (!grid) return;
+  // Defensive: R.passages should always be an array by the time this runs
+  // (apiListPassages validates its response shape), but a render function
+  // should never throw on bad data rather than leaving a stale "Loading…".
+  if (!Array.isArray(R.passages)) R.passages = [];
+  if (!apiUrl && !R.passages.length) {
+    grid.innerHTML = '<div class="empty">Connect a Google Sheet to unlock AI reading passages — see Settings.</div>';
+    return;
+  }
+  let list = R.passages;
+  if (R.libFilter === 'open') list = list.filter(p => !p.QuizResult);
+  else if (R.libFilter === 'quizzed') list = list.filter(p => !!p.QuizResult);
+  if (!list.length) { grid.innerHTML = '<div class="empty">No passages match this filter.</div>'; return; }
+  grid.innerHTML = list.map(p => {
+    const score = p.QuizResult ? safeJson(p.QuizResult, null) : null;
+    const chip = score ? ('Quiz ' + score.score + '/' + score.total) : (p.OpenedCount > 0 ? 'In progress' : 'New');
+    return '<button type="button" class="rd-lib-card" data-action="open-passage" data-id="' + esc(p.Id) + '">' +
+      '<div class="rd-lib-card-top"><span class="rd-lib-date">' + esc(fmtDate(p.Created)) + (p.Level ? ' · ' + esc(p.Level) : '') + '</span>' +
+      '<span class="chip">' + esc(chip) + '</span></div>' +
+      '<div class="rd-lib-title" lang="sv">' + esc(p.Title || 'Reading passage') + '</div>' +
+      '<div class="rd-lib-meta">' + p.OpenedCount + ' of ' + p.RequestedCount + ' words opened' +
+      (p.WordCount ? ' · ' + esc(String(p.WordCount)) + ' words' : '') + '</div></button>';
   }).join('');
 }
 
-// Tokenizes the (already-esc()'d) Swedish text and wraps any word run that
-// matches one of `rows`' headword, saved Grammar Forms, or Seen As entries —
-// exact match first, then a stemmed fallback via stemWord — in a clickable
-// span. Mirrors the three-way check clientMatches (line ~428) already does,
-// since the model will naturally inflect words rather than using bare
-// dictionary forms. Returns the built HTML plus which rows actually matched.
-function buildReadingHtml(text, rows) {
-  const exact = new Map(), stems = new Map();
-  rows.forEach(r => {
-    const forms = [r[W]].concat(parseForms(r[GF]).map(f => f.sv)).concat(parseSeenAs(r[SEEN]));
-    forms.forEach(f => {
-      const lw = (f || '').toLowerCase();
-      if (!lw) return;
-      exact.set(lw, r);
-      const st = stemWord(lw);
-      if (st.length >= 4) stems.set(st, r);
-    });
-  });
-  const matched = new Set();
-  const wordRe = /[a-zA-ZåäöÅÄÖ]+/g;
-  const highlightPara = para => esc(para).replace(wordRe, tok => {
-    const lw = tok.toLowerCase();
-    const row = exact.get(lw) || stems.get(stemWord(lw));
-    if (!row) return tok;
-    matched.add(row[W]);
-    return '<span class="rd-word" data-word="' + esc(row[W]) + '" tabindex="0" role="link">' + tok + '</span>';
-  });
-  const paragraphs = (text || '').trim().split(/\n{2,}/).filter(Boolean);
-  return { html: paragraphs.map(p => '<p>' + highlightPara(p) + '</p>').join(''), matched: Array.from(matched) };
-}
-
-function renderReadingEmpty(kind, n) {
-  $('readingRegenBtn').hidden = true;
-  const msg = kind === 'demo'
-    ? 'Connect a Google Sheet to unlock AI reading passages — see Settings.'
-    : n === 0
-    ? 'Nothing due for review today — nice work! Come back tomorrow, or review more in Practice.'
-    : 'You have ' + n + ' word' + (n === 1 ? '' : 's') + ' due today — at least ' + READING_MIN_WORDS + ' are needed for a reading passage. Review more in Practice, or add new words.';
-  $('readingBody').innerHTML = '<div class="empty">' + esc(msg) + '</div>';
-}
-function renderReadingLoading() {
-  $('readingRegenBtn').hidden = true;
-  $('readingBody').innerHTML = '<div class="panel rd-passage"><p class="rd-loading-note">Writing your story…</p>' +
-    '<div class="rd-skeleton-line"></div><div class="rd-skeleton-line"></div>' +
-    '<div class="rd-skeleton-line"></div><div class="rd-skeleton-line"></div>' +
-    '</div>';
-}
-function renderReadingError(message) {
-  $('readingRegenBtn').hidden = false;
-  $('readingBody').innerHTML = '<div class="empty">Could not generate a reading passage: ' + esc(message) + '</div>';
-}
-async function renderReadingPassage(entry, isPast) {
-  $('readingRegenBtn').hidden = !apiUrl;
-  readingCurrentId = entry.id;
-  renderReadingHistory();
-  let allRows = [];
-  try { allRows = await fetchAllRows(false); } catch (e) { /* fall back to headword-only rows below */ }
-  // Words edited/deleted since this passage was generated still get
-  // highlighted using a minimal stand-in row (just the bare headword).
-  const rows = entry.words.map(w =>
-    allRows.find(r => r[W].toLowerCase() === w.toLowerCase()) || { [W]: w, [GF]: '[]', [SEEN]: '[]' });
-  const { html, matched } = buildReadingHtml(entry.text, rows);
-  let caption = matched.length + ' of the ' + entry.words.length + ' words picked for this passage appear above — tap one to open it.';
-  if (entry.requested > entry.words.length) {
-    caption += ' Only ' + entry.words.length + ' words were due, so all of them were used.';
-  }
-  if (isPast) {
-    const d = new Date(entry.id);
-    caption = 'Past passage from ' + (isNaN(d) ? entry.date : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })) + '. ' + caption;
-  }
+function renderReadSetup() {
+  const countOpts = READING_COUNT_OPTIONS.map(n =>
+    '<option value="' + n + '"' + (n === R.setup.count ? ' selected' : '') + '>' + n + '</option>').join('');
+  const levels = ['A1', 'A2', 'B1', 'B2'];
   $('readingBody').innerHTML =
-    '<div class="panel rd-passage" lang="sv">' + html + '</div>' +
-    '<p class="rd-caption">' + esc(caption) + '</p>';
+    '<button type="button" class="link" data-action="to-library">← All passages</button>' +
+    '<div class="panel rd-setup">' +
+    '<h2>New passage</h2>' +
+    '<p class="rd-lib-sub">Choose how many of your due words to use, and a level. Nothing is generated until you press Generate.</p>' +
+    '<label>Words: <select id="rdSetupCount">' + countOpts + '</select></label>' +
+    '<div role="group" aria-label="Level" class="rd-pills">' +
+    levels.map(l => '<button type="button" data-action="set-level" data-level="' + l + '" aria-pressed="' + (R.setup.level === l) + '">' + l + '</button>').join('') +
+    '</div>' +
+    '<p class="rd-lib-sub" id="rdSetupSummary"></p>' +
+    '<div class="rd-setup-actions">' +
+    '<button type="button" data-action="to-library">Cancel</button>' +
+    '<button type="button" class="primary" data-action="generate">Generate passage</button>' +
+    '</div></div>';
+  updateSetupSummary();
+}
+function updateSetupSummary() {
+  const el = $('rdSetupSummary'); if (!el) return;
+  el.textContent = R.setup.level + ' · up to ' + R.setup.count + ' of your due words';
 }
 
-async function startReading(force) {
-  const history = loadReadingHistory();
-  const latest = history[0];
-  if (!force && latest && latest.date === todayStr() && latest.apiUrl === apiUrl) {
-    await renderReadingPassage(latest);
-    return;
-  }
-  readingCurrentId = null;
-  renderReadingHistory();
-  if (!apiUrl) { renderReadingEmpty('demo'); return; }
-  renderReadingLoading();   // before the row fetch too — that alone can take seconds
+function renderReadLoading() {
+  $('readingBody').innerHTML =
+    '<div class="panel rd-passage"><p class="rd-loading-note">Writing a ' + esc(R.setup.level) + ' story with your words…</p>' +
+    '<div class="rd-skeleton-line"></div><div class="rd-skeleton-line"></div>' +
+    '<div class="rd-skeleton-line"></div><div class="rd-skeleton-line"></div>' +
+    '<button type="button" class="rd-cancel-btn" data-action="cancel-loading">Cancel</button></div>';
+}
+function renderReadGenerateError(message) {
+  $('readingBody').innerHTML = '<div class="empty">Could not generate a reading passage: ' + esc(message) + '</div>' +
+    '<div class="rd-setup-actions"><button type="button" data-action="to-library">All passages</button>' +
+    '<button type="button" class="primary" data-action="generate">Try again</button></div>';
+}
+function cancelGeneration() { if (R.abort) R.abort.abort(); }
+
+async function handleGenerate() {
+  if (!apiUrl) return;
+  R.screen = 'loading';
+  renderReadLoading();
   let dueRows;
   try {
     const rows = await apiSearch('');
     dueRows = rows.filter(r => reviewState(r).due <= todayStr());
-  } catch (e) { renderReadingError(e.message); return; }
-  if (dueRows.length < READING_MIN_WORDS) { renderReadingEmpty('few', dueRows.length); return; }
-  const requested = readingCount();
-  const words = shuffle(dueRows.slice()).slice(0, requested).map(r => r[W]);
+  } catch (e) { renderReadGenerateError(e.message); return; }
+  if (dueRows.length < READING_MIN_WORDS) {
+    $('readingBody').innerHTML = '<div class="empty">You have ' + dueRows.length + ' word' + (dueRows.length === 1 ? '' : 's') +
+      ' due today — at least ' + READING_MIN_WORDS + ' are needed for a reading passage. Review more in Practice, or add new words.</div>' +
+      '<button type="button" class="link" data-action="to-library">← All passages</button>';
+    return;
+  }
+  const words = shuffle(dueRows.slice()).slice(0, R.setup.count).map(r => r[W]);
+  R.abort = new AbortController();
   try {
-    const data = await post({ action: 'generateReading', words });
-    const entry = {
-      id: new Date().toISOString(), date: todayStr(), apiUrl, requested, words,
-      text: data.text || '', wordsUsed: Array.isArray(data.wordsUsed) ? data.wordsUsed : []
-    };
-    saveReadingHistory([entry].concat(loadReadingHistory()));
-    await renderReadingPassage(entry);
-  } catch (e) { renderReadingError(e.message); }
+    const passage = await apiGeneratePassage(words, R.setup.level, R.abort.signal);
+    R.current = parsePassage(passage);
+    R.screen = 'reading';
+    renderReadReading(R.current);
+  } catch (e) {
+    if (e.name === 'AbortError') { goToSetup(); return; }
+    renderReadGenerateError(e.message);
+  } finally {
+    R.abort = null;
+  }
 }
 
-// Opens a tapped word as a single card on the Search page.
-function jumpToWord(word) {
-  setView('search');
-  lookupWord(word);
+// Wraps each target word's exact surface occurrence in paragraph `pIdx` in a
+// tappable button — unlike the old span-based .rd-word, a real <button> per
+// the spec's accessibility requirements (still visually inline via CSS).
+// Punctuation naturally stays outside, since \p{L} only matches letters.
+function highlightParagraph(text, pIdx, passage) {
+  return esc(text).replace(/[\p{L}]+/gu, tok => {
+    const lw = tok.toLowerCase();
+    const t = passage.targets.find(t => t.paragraphIndex === pIdx && t.surface.toLowerCase() === lw);
+    if (!t) return tok;
+    return '<button type="button" class="rd-word" data-action="word" data-lemma="' + esc(t.lemma) + '">' + tok + '</button>';
+  });
 }
+function renderReadReading(passage) {
+  const html = passage.paragraphs.map((p, i) => '<p>' + highlightParagraph(p, i, passage) + '</p>').join('');
+  $('readingBody').innerHTML =
+    '<button type="button" class="link" data-action="to-library">← All passages</button>' +
+    '<div class="rd-reading-layout">' +
+    '<article class="panel rd-passage" lang="sv">' +
+    '<h2>' + esc(passage.title) + '</h2>' +
+    '<p class="rd-caption">' + esc(passage.level || '') + (passage.wordCount ? ' · ' + esc(String(passage.wordCount)) + ' words' : '') + '</p>' +
+    html + '</article>' +
+    '<aside id="rdPanel" class="rd-panel" hidden></aside>' +
+    '</div>';
+}
+
+// Side panel — phase 3 shows read-only word info; grading/"save to my
+// words"/opened-word persistence are added in phase 4 once the backend
+// 'updatePassage' action exists.
+async function openWordPanel(lemma) {
+  const panel = $('rdPanel');
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = '<p class="empty">Loading…</p>';
+  let row = null;
+  try { const rows = await fetchAllRows(false); row = findExistingRow(rows, lemma); } catch (e) { /* fall through to "not in your words" */ }
+  const closeBtn = '<button type="button" class="rd-panel-close" data-action="close-panel" aria-label="Close word details">✕</button>';
+  if (row) {
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(row[W]) + '</div>' + posChipHtml(row) + entryBodyHtml(row);
+  } else {
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(lemma) + '</div>' +
+      '<p class="rd-lib-sub">Not in your words yet.</p>';
+  }
+}
+function closePanel() { const panel = $('rdPanel'); if (panel) panel.hidden = true; }
 
 /* ================= PRACTICE VIEW ================= */
 const P = { deck: [], picks: [], i: 0, flipped: false, dir: 'sv2en', mode: 'todo', kind: 'flash', got: 0, missed: [], total: 0 };
@@ -1878,7 +2012,7 @@ function setView(v) {
     if (b.dataset.view === v) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
   if (v === 'practice') startPractice();
-  else if (v === 'reading') startReading();
+  else if (v === 'reading') enterReadTab();
   else if (v === 'words') runSearch();
   else if ($('searchView').classList.contains('idle')) refreshDueLine();
 }
@@ -1888,7 +2022,7 @@ function setView(v) {
 // on its stale (e.g. "connect a sheet") state.
 function refreshCurrentView() {
   if (!$('practiceView').hidden) startPractice();
-  else if (!$('readingView').hidden) startReading();
+  else if (!$('readingView').hidden) enterReadTab();
   else if (!$('wordsView').hidden) runSearch();
   else if ($('sq').value.trim()) lookupWord();
   else refreshDueLine();
@@ -2160,25 +2294,33 @@ $('checkClose').addEventListener('click', () => $('checkDialog').close());
 $('checkDialog').addEventListener('close', () => { CK.stop = true; });
 
 // ---- Read ----
-$('readingRegenBtn').addEventListener('click', () => startReading(true));
-$('readingCount').value = String(readingCount());
-$('readingCount').addEventListener('change', e => store.set('ordbok_reading_count', e.target.value));
-$('readingHistoryList').addEventListener('click', e => {
-  const btn = e.target.closest('button[data-id]');
-  if (!btn) return;
-  const h = loadReadingHistory();
-  const entry = h.find(x => x.id === btn.dataset.id);
-  if (!entry) return;
-  renderReadingPassage(entry, entry !== h[0]);
-  $('readingView').scrollIntoView({ behavior: 'smooth', block: 'start' });
-});
+// Every screen's interactive markup is injected dynamically (see the "Read
+// tab screens" section), so — same delegated pattern as elsewhere in this
+// file (e.g. the Words list) — a single click listener on the shared
+// container reads each element's data-action instead of one-off listeners.
 $('readingBody').addEventListener('click', e => {
-  const span = e.target.closest('.rd-word');
-  if (span) jumpToWord(span.dataset.word);
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === 'new-passage') goToSetup();
+  else if (action === 'to-library') goToLibrary();
+  else if (action === 'lib-filter') { R.libFilter = btn.dataset.filter; renderLibraryGrid(); }
+  else if (action === 'open-passage') goToReading(btn.dataset.id);
+  else if (action === 'set-level') {
+    R.setup.level = btn.dataset.level;
+    store.set('ordbok_reading_level', R.setup.level);
+    renderReadSetup();
+  }
+  else if (action === 'generate') handleGenerate();
+  else if (action === 'cancel-loading') cancelGeneration();
+  else if (action === 'word') openWordPanel(btn.dataset.lemma);
+  else if (action === 'close-panel') closePanel();
 });
-$('readingBody').addEventListener('keydown', e => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('rd-word')) {
-    e.preventDefault(); jumpToWord(e.target.dataset.word);
+$('readingBody').addEventListener('change', e => {
+  if (e.target.id === 'rdSetupCount') {
+    R.setup.count = parseInt(e.target.value, 10) || READING_COUNT_DEFAULT;
+    store.set('ordbok_reading_count', String(R.setup.count));
+    updateSetupSummary();
   }
 });
 
