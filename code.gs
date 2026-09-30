@@ -48,7 +48,7 @@ const POS_OPTIONS = ['noun (en)', 'noun (ett)', 'verb', 'adjective', 'adverb', '
 // Hard cap on generated tokens. Keeps every auto-fill call short (fields are
 // meant to be quick reference notes, not essays) and cuts response time a lot,
 // since latency scales mostly with how many tokens the model has to generate.
-const AUTOFILL_MAX_TOKENS = 450;
+const AUTOFILL_MAX_TOKENS = 550;   // room for 5 adjective forms + Recognised/Suggestion/Verdict keys
 
 // Same rationale as AUTOFILL_MAX_TOKENS, sized for a 100-150 word Swedish
 // passage plus the wordsUsed array and JSON overhead.
@@ -61,7 +61,10 @@ const READING_WORD_COUNT = { min: 100, max: 150 };
 // save/edit/learn immediately clears the cache so you never see stale data.
 const SEARCH_CACHE_SECONDS = 50;
 
-function autofill_(word, sourceSentence) {
+// savedEntry (optional) switches on "check mode", used by the client's
+// "Check my words" tool: the model also judges the saved entry and returns
+// "Verdict" ("ok" | "fix") and "Issues" alongside a corrected entry.
+function autofill_(word, sourceSentence, savedEntry) {
   const propName = PROVIDER === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY';
   const key = PropertiesService.getScriptProperties().getProperty(propName);
   if (!key) return { ok: false, error: propName + ' is not set in Script properties.' };
@@ -76,15 +79,24 @@ function autofill_(word, sourceSentence) {
     'literal-but-unnatural constructions (e.g. say "helt slut" or "jättetrött", not a stiff literal "helt trött", ' +
     'for "very tired"). If in doubt, choose the simpler, more common phrasing an SFI (Swedish for immigrants) course ' +
     'would teach at A2-B1 level.\n' +
+    'IMPORTANT: the entry is ALWAYS about the Dictionary Form, never the form that was typed. If the input is ' +
+    'inflected (e.g. "tystare"), every other field — pronunciation, part of speech, meaning, example and forms — ' +
+    'describes the dictionary form ("tyst" = "quiet", not "quieter").\n' +
+    '"Recognised": true if the input is a real Swedish word or phrase (any inflection, correctly spelled), else false;\n' +
+    '"Suggestion": if "Recognised" is false, the most likely Swedish word the learner meant (e.g. "flygplats" for ' +
+    '"flyplats"), in its dictionary form; otherwise "";\n' +
     '"Dictionary Form": the word\'s standard dictionary/lemma form, lowercase — infinitive for verbs, singular ' +
     'indefinite for nouns (no article), base/positive form for adjectives; if the input is already the dictionary ' +
     'form, return it unchanged (lowercased); if it\'s inflected (e.g. "gick", "bilar", "snabbare"), return its ' +
     'lemma (e.g. "gå", "bil", "snabb");\n' +
-    '"Pronunciation Guide": an English-friendly respelling in lowercase, syllables separated by hyphens, with ONLY the stressed syllable in CAPS, e.g. "hem-TREV-lig";\n' +
+    '"Pronunciation Guide": an English-friendly respelling of the dictionary form, all lowercase, syllables separated by hyphens, ' +
+    'with the stress mark "ˈ" directly before the stressed syllable — never capital letters — e.g. "hem-ˈtrev-lig", "ˈtyst";\n' +
     '"Part of Speech": one of ' + JSON.stringify(POS_OPTIONS) + ' (use "noun (en)" or "noun (ett)" to show the gender; pick the most common use);\n' +
-    '"English Meaning": a short translation, 6 words or fewer, ALWAYS lowercase (except proper nouns), and for ' +
-    'verbs do NOT prefix with "to" (write "take", not "to take") (most common sense; a second sense only if truly common, comma-separated);\n' +
-    '"Example Sentence (Swedish)": one short everyday sentence (max 8 words) using the word exactly as given (A2-B1 level);\n' +
+    '"English Meaning": a short translation of the dictionary form, 6 words or fewer, ALWAYS lowercase (except proper nouns); ' +
+    'nouns in the singular ("sandwich", not "sandwiches"); verbs in the plain form and NOT prefixed with "to" ' +
+    '(write "take", not "to take" or "took") (most common sense; a second sense only if truly common, comma-separated);\n' +
+    '"Example Sentence (Swedish)": one short everyday sentence (max 8 words) using the dictionary form (A2-B1 level), ' +
+    'unless the learner supplies a source sentence (then follow that, even if it uses another form);\n' +
     '"Example Sentence (English)": its English translation;\n' +
     '"Forms": an array of the word\'s key grammatical forms, each item shaped ' +
     '{"label": string, "sv": string, "example_sv": string, "example_en": string}, built as follows:\n' +
@@ -92,15 +104,25 @@ function autofill_(word, sourceSentence) {
     '(e.g. "en bil", "bilen", "bilar", "bilarna"), each with a short (max 8 word) example sentence using that exact form;\n' +
     '  - If Part of Speech is verb: exactly 4 items labelled "Infinitive", "Present", "Past", "Supine" (the four principal parts, e.g. "välja", "väljer", "valde", "valt"), ' +
     'each with a short (max 8 word) example sentence using that exact form (supine example uses "har" or "hade");\n' +
-    '  - If Part of Speech is adjective: exactly 3 items labelled "Base form (en-word)", "Neuter form (ett-word)", "Plural / definite form", each with a short (max 8 word) example sentence;\n' +
+    '  - If Part of Speech is adjective: exactly 5 items labelled "Base form (en-word)", "Neuter form (ett-word)", "Plural / definite form", ' +
+    '"Comparative", "Superlative" (e.g. "tyst", "tyst", "tysta", "tystare", "tystast"; irregular ones as they are, e.g. "bättre", "bäst"; ' +
+    'for adjectives that only compare with "mer"/"mest", use e.g. "mer intressant"), each with a short (max 8 word) example sentence;\n' +
     '  - Otherwise (adverb, pronoun, preposition, etc.): an empty array [].\n' +
     'The "sv" field of each form item must be ONLY the inflected word itself (no article, no extra words) so it can be matched against later, e.g. "bilar" not "en bilar". ' +
-    'If the input is not a real Swedish word, still return the JSON with "English Meaning" set to "Not recognised as Swedish" and "Forms" as [].';
+    'If the input is not a real Swedish word, still return the JSON with "Recognised" false, "English Meaning" set to "Not recognised as Swedish" and "Forms" as [].' +
+    (savedEntry
+      ? '\nThe learner also sends an entry they SAVED earlier for this word. Compare it with your own answer and add two keys: ' +
+        '"Verdict": "fix" only if the saved entry has a real error — headword is not the dictionary form, a misspelling, ' +
+        'the meaning/part of speech is wrong or belongs to a different form, the example uses the word wrongly, or forms are ' +
+        'missing or wrong — otherwise "ok" (ignore harmless wording differences, synonyms and pronunciation style); ' +
+        '"Issues": one short sentence naming the errors when "fix", else "".'
+      : '');
 
-  const userMessage = sourceSentence
+  let userMessage = sourceSentence
     ? word + '\n\nThe learner found this word in the following sentence — if natural, base "Example Sentence (Swedish)" ' +
       'closely on it (adapt only as needed to fit the length/word rules), and still give its English translation as usual:\n"' + sourceSentence + '"'
     : word;
+  if (savedEntry) userMessage += '\n\nSaved entry:\n' + JSON.stringify(savedEntry);
 
   let fields;
   if (PROVIDER === 'gemini') {
@@ -404,7 +426,9 @@ function doGet(e) {
 }
 
 // POST (JSON sent as text/plain). Actions:
-//   { action: 'autofill', word, sourceSentence } -> LLM fills the other fields + Grammar Forms
+//   { action: 'autofill', word, sourceSentence, savedEntry? } -> LLM fills the other fields + Grammar Forms
+//                                                    (savedEntry = check mode: also returns Verdict/Issues)
+//   { action: 'delete', word }                   -> remove the word's row
 //   { action: 'generateReading', words }         -> LLM writes a short passage using the given due words
 //   { action: 'setLearned', word, learned }      -> tick / untick the Learned column
 //   { action: 'updateReview', word, reviewState } -> overwrite the Review State column (spaced repetition)
@@ -423,7 +447,8 @@ function doPost(e) {
     }
 
     if (data.action === 'autofill') {
-      return json_(autofill_(String(data.word || '').trim(), String(data.sourceSentence || '').trim()));
+      const savedEntry = data.savedEntry && typeof data.savedEntry === 'object' ? data.savedEntry : null;
+      return json_(autofill_(String(data.word || '').trim(), String(data.sourceSentence || '').trim(), savedEntry));
     }
     if (data.action === 'generateReading') {
       return json_(generateReading_(Array.isArray(data.words) ? data.words : []));
@@ -445,6 +470,14 @@ function doPost(e) {
       const row = findRow_(sh, data.word);
       if (row < 0) return json_({ ok: false, error: 'Word not found in the sheet' });
       sh.getRange(row, map['Review State']).setValue(String(data.reviewState || '{}'));
+      invalidateCache_();
+      return json_({ ok: true });
+    }
+
+    if (data.action === 'delete') {
+      const row = findRow_(sh, data.word);
+      if (row < 0) return json_({ ok: false, error: 'Word not found in the sheet' });
+      sh.deleteRow(row);
       invalidateCache_();
       return json_({ ok: true });
     }
