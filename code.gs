@@ -85,6 +85,13 @@ const AUTOFILL_MAX_TOKENS = 550;   // room for 5 adjective forms + Recognised/Su
 const READING_MAX_TOKENS = 700;
 const READING_WORD_COUNT = { min: 100, max: 150 };
 
+// generatePassage_ produces a much bigger payload than either call above —
+// a full story PLUS a per-word targets array PLUS a quiz — so it gets its
+// own, larger token budget and its own word-count/quiz-size ranges.
+const PASSAGE_MAX_TOKENS = 2200;
+const PASSAGE_WORD_COUNT = { min: 120, max: 220 };
+const PASSAGE_QUIZ_COUNT = { min: 4, max: 6 };
+
 // How long a search result set is cached (seconds). Search re-reads the whole
 // sheet otherwise, and a Sheets API read is the slowest part of a search by
 // far, so this is the main lever for making search feel instant. Any
@@ -273,6 +280,237 @@ function generateReading_(words) {
     fields = JSON.parse(body.choices[0].message.content);
   }
   return { ok: true, text: String(fields.text || ''), wordsUsed: Array.isArray(fields.wordsUsed) ? fields.wordsUsed : [] };
+}
+
+/**
+ * Writes a longer Swedish reading passage (PASSAGE_WORD_COUNT words) grounded
+ * in `words`, plus a "targets" array pinning exactly where each word appears
+ * (paragraph index + its exact inflected surface form) and a short multiple-
+ * choice quiz over it — the one structured call behind the Read tab's
+ * "Generate passage" action. Unlike autofill_/generateReading_ above, this
+ * uses each provider's real structured-output/schema mode (not just JSON-
+ * mode prompting, see callPassageProvider_) AND validates the result
+ * server-side afterward (validatePassage_ below) — schema mode guarantees
+ * *shape*, not *correctness* (it can't guarantee a target's surface actually
+ * occurs where claimed, or that a lemma traces back to a word actually asked
+ * for), so both are needed. Retries once — a fresh call, same prompt — if
+ * validation still fails after dropping whatever it safely can; no existing
+ * call in this file retries today, so this is new territory here.
+ */
+function generatePassage_(words, level) {
+  const propName = PROVIDER === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY';
+  const key = PropertiesService.getScriptProperties().getProperty(propName);
+  if (!key) return { ok: false, error: propName + ' is not set in Script properties.' };
+  const list = (Array.isArray(words) ? words : []).map(w => String(w || '').trim()).filter(Boolean);
+  if (list.length < 4) return { ok: false, error: 'Need at least 4 words to generate a passage.' };
+  const lvl = String(level || 'A2').trim() || 'A2';
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = callPassageProvider_(key, list, lvl);
+    if (!result.ok) return result;   // hard provider/network error — no point retrying
+    const validated = validatePassage_(result.parsed, list);
+    if (validated.ok) return { ok: true, data: validated.data };
+    if (attempt === 1) return { ok: false, error: 'Generated passage failed validation twice: ' + validated.reason };
+  }
+}
+
+// The actual provider round trip for generatePassage_ — split out so the
+// retry loop above doesn't duplicate the OpenAI/Gemini branching.
+function callPassageProvider_(key, list, level) {
+  const system =
+    'You are a Swedish language tutor writing a short graded-reader story for an English-speaking adult learner at ' +
+    level + ' level. Write ONE passage in Swedish, ' + PASSAGE_WORD_COUNT.min + '-' + PASSAGE_WORD_COUNT.max +
+    ' words long, across 2-4 paragraphs, that naturally uses as many as possible of a given list of Swedish words. ' +
+    'You may inflect/conjugate a given word as needed to fit the sentence (natural grammar always wins over using ' +
+    'a word\'s exact dictionary/lemma form) — it is fine to skip a word if it cannot be worked in naturally. Keep ' +
+    'everything outside the target words at or below ' + level + ' level (short sentences, everyday topics, present ' +
+    'or simple past tense) — the point is comfortable reading practice, not a challenge.\n' +
+    'Then write ' + PASSAGE_QUIZ_COUNT.min + '-' + PASSAGE_QUIZ_COUNT.max + ' multiple-choice questions about the ' +
+    'passage: a mix of word-meaning questions and at least one question testing overall understanding of the story. ' +
+    'Each question has exactly 4 short answer options with exactly one correct answer.\n' +
+    'Return a JSON object with these keys:\n' +
+    '"title": a short title for the story, in Swedish;\n' +
+    '"paragraphs": an array of the story\'s paragraphs as plain strings (no markdown, no numbering);\n' +
+    '"targets": for EVERY word from the given list you actually managed to use, one object ' +
+    '{"lemma": the word exactly as given, "surface": the EXACT inflected form you used, character for character, ' +
+    'as it appears in "paragraphs", "paragraphIndex": the 0-based index of the paragraph it appears in, ' +
+    '"pos": its part of speech (one short word, e.g. "verb", "noun", "adjective", "adverb")} — this is how the ' +
+    'reader app highlights the word later, so "surface"/"paragraphIndex" must be exactly right, not approximate;\n' +
+    '"quiz": an array of question objects {"prompt": the question, in Swedish or English as fits, "options": ' +
+    'exactly 4 short answer strings, "answerIndex": the 0-based index of the correct option, "wordId": the exact ' +
+    '"lemma" of the target word this question is about, or "" for a general understanding question}.';
+
+  const userMessage = 'Words to use:\n' + list.join(', ');
+
+  if (PROVIDER === 'gemini') {
+    // Gemini's schema dialect: uppercase type names, no additionalProperties.
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        title: { type: 'STRING' },
+        paragraphs: { type: 'ARRAY', items: { type: 'STRING' } },
+        targets: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              lemma: { type: 'STRING' }, surface: { type: 'STRING' },
+              paragraphIndex: { type: 'INTEGER' }, pos: { type: 'STRING' },
+            },
+            required: ['lemma', 'surface', 'paragraphIndex', 'pos'],
+          },
+        },
+        quiz: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              prompt: { type: 'STRING' }, options: { type: 'ARRAY', items: { type: 'STRING' } },
+              answerIndex: { type: 'INTEGER' }, wordId: { type: 'STRING' },
+            },
+            required: ['prompt', 'options', 'answerIndex', 'wordId'],
+          },
+        },
+      },
+      required: ['title', 'paragraphs', 'targets', 'quiz'],
+    };
+    const res = UrlFetchApp.fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': key },
+      muteHttpExceptions: true,
+      payload: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+        generationConfig: {
+          temperature: 0.7, responseMimeType: 'application/json', responseSchema: schema,
+          maxOutputTokens: PASSAGE_MAX_TOKENS,
+        },
+      }),
+    });
+    const body = JSON.parse(res.getContentText());
+    if (res.getResponseCode() !== 200) {
+      return { ok: false, error: 'Gemini error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
+    }
+    return { ok: true, parsed: JSON.parse(body.candidates[0].content.parts[0].text) };
+  }
+
+  // OpenAI strict json_schema mode requires additionalProperties:false and
+  // every property listed in required (no optional keys) on every object.
+  const schema = {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      paragraphs: { type: 'array', items: { type: 'string' } },
+      targets: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            lemma: { type: 'string' }, surface: { type: 'string' },
+            paragraphIndex: { type: 'integer' }, pos: { type: 'string' },
+          },
+          required: ['lemma', 'surface', 'paragraphIndex', 'pos'],
+          additionalProperties: false,
+        },
+      },
+      quiz: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string' }, options: { type: 'array', items: { type: 'string' } },
+            answerIndex: { type: 'integer' }, wordId: { type: 'string' },
+          },
+          required: ['prompt', 'options', 'answerIndex', 'wordId'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['title', 'paragraphs', 'targets', 'quiz'],
+    additionalProperties: false,
+  };
+  const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + key },
+    muteHttpExceptions: true,
+    payload: JSON.stringify({
+      model: OPENAI_MODEL,
+      // Same gpt-5.x constraint as autofill_/generateReading_ above: no
+      // `temperature`, and `max_completion_tokens` rather than `max_tokens`.
+      max_completion_tokens: PASSAGE_MAX_TOKENS,
+      response_format: { type: 'json_schema', json_schema: { name: 'passage', strict: true, schema: schema } },
+      messages: [{ role: 'system', content: system }, { role: 'user', content: userMessage }],
+    }),
+  });
+  const body = JSON.parse(res.getContentText());
+  if (res.getResponseCode() !== 200) {
+    return { ok: false, error: 'OpenAI error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
+  }
+  return { ok: true, parsed: JSON.parse(body.choices[0].message.content) };
+}
+
+/**
+ * Server-side semantic checks on a generatePassage_ response — schema mode
+ * (above) guarantees shape, not correctness. Drops individual targets/quiz
+ * items that fail a check rather than failing the whole passage, except when
+ * too little survives to be useful (the two "hard failure" conditions near
+ * the end), which is what triggers generatePassage_'s one retry.
+ */
+function validatePassage_(parsed, requestedWords) {
+  const paragraphs = Array.isArray(parsed && parsed.paragraphs) ? parsed.paragraphs.map(p => String(p || '')) : [];
+  if (!paragraphs.length) return { ok: false, reason: 'no paragraphs returned' };
+
+  const requestedStems = (requestedWords || []).map(w => stem_(w));
+
+  const targets = (Array.isArray(parsed.targets) ? parsed.targets : []).filter(t => {
+    if (!t || typeof t !== 'object') return false;
+    const pi = t.paragraphIndex;
+    if (!Number.isInteger(pi) || pi < 0 || pi >= paragraphs.length) return false;
+    const surface = String(t.surface || '');
+    if (!surface) return false;
+    // Unicode-aware whole-word check: split the paragraph on runs of
+    // non-letters (not ASCII \b, which mis-bounds on å/ä/ö — the same caveat
+    // already flagged for the client-side cloze drill) and require an exact
+    // case-insensitive match among the paragraph's own tokens, not a
+    // substring (indexOf would false-positive on e.g. "sprang" inside a
+    // longer word, and false-negative at a å/ä/ö boundary).
+    const tokens = paragraphs[pi].match(/[\p{L}]+/gu) || [];
+    if (!tokens.some(tok => tok.toLowerCase() === surface.toLowerCase())) return false;
+    // The lemma must trace back to a word actually requested (stem-matched,
+    // same fallback rowMatchesQuery_ uses elsewhere) — catches the model
+    // inventing a target it wasn't given.
+    const lemma = String(t.lemma || '');
+    if (!lemma) return false;
+    const lemmaOk = requestedWords.some(w => norm_(w) === norm_(lemma)) || requestedStems.indexOf(stem_(lemma)) !== -1;
+    return lemmaOk;
+  }).map(t => ({
+    wordId: norm_(t.lemma), lemma: norm_(t.lemma), surface: String(t.surface),
+    paragraphIndex: t.paragraphIndex, pos: String(t.pos || ''),
+  }));
+
+  const quiz = (Array.isArray(parsed.quiz) ? parsed.quiz : []).filter(q => {
+    if (!q || typeof q !== 'object') return false;
+    if (!String(q.prompt || '').trim()) return false;
+    if (!Array.isArray(q.options) || q.options.length < 2) return false;
+    if (!Number.isInteger(q.answerIndex) || q.answerIndex < 0 || q.answerIndex >= q.options.length) return false;
+    return true;
+  }).map(q => ({
+    prompt: String(q.prompt), options: q.options.map(o => String(o)),
+    answerIndex: q.answerIndex, wordId: norm_(q.wordId || ''),
+  }));
+
+  if (targets.length < 2) return { ok: false, reason: 'fewer than 2 usable target words survived validation' };
+  if (quiz.length < PASSAGE_QUIZ_COUNT.min) {
+    return { ok: false, reason: 'fewer than ' + PASSAGE_QUIZ_COUNT.min + ' usable quiz questions survived validation' };
+  }
+
+  return {
+    ok: true,
+    data: { title: String(parsed.title || '').trim() || 'Reading passage', paragraphs: paragraphs, targets: targets, quiz: quiz },
+  };
 }
 
 /**
@@ -565,6 +803,8 @@ function doGet(e) {
 //                                                    (savedEntry = check mode: also returns Verdict/Issues)
 //   { action: 'delete', word }                   -> remove the word's row
 //   { action: 'generateReading', words }         -> LLM writes a short passage using the given due words
+//   { action: 'generatePassage', words, level? } -> LLM writes a validated story+targets+quiz passage, saved to
+//                                                    the Passages tab; { ok:false, error } if generation/validation fails
 //   { action: 'importPassage', passage }         -> append an already-built Passage row (one-time client migration
 //                                                    of the old local reading history; no-ops if its Id already exists)
 //   { action: 'setLearned', word, learned }      -> tick / untick the Learned column
@@ -608,6 +848,39 @@ function doPost(e) {
       appendPassageRow_(psh, pmap, passage);
       invalidatePassagesCache_();
       return json_({ ok: true, passage: passage, action: 'imported' });
+    }
+
+    // generatePassage_ itself is an unlocked LLM call (same rationale as
+    // autofill/generateReading above), but persisting its result is a Sheet
+    // write, so — same pattern as importPassage just above — this action
+    // acquires the lock itself only for the append step, and returns before
+    // ever reaching the Words-sheet lock/getSheet_() call below.
+    if (data.action === 'generatePassage') {
+      const words = Array.isArray(data.words) ? data.words : [];
+      const result = generatePassage_(words, data.level);
+      if (!result.ok) return json_(result);
+      const now = new Date().toISOString();
+      const passage = {
+        Id: now,
+        Created: now,
+        Status: 'ready',
+        Title: result.data.title,
+        Level: String(data.level || 'A2').trim() || 'A2',
+        WordCount: String(result.data.paragraphs.join(' ').split(/\s+/).filter(Boolean).length),
+        Paragraphs: JSON.stringify(result.data.paragraphs),
+        Targets: JSON.stringify(result.data.targets),
+        Quiz: JSON.stringify(result.data.quiz),
+        RequestedWords: JSON.stringify(words),
+        OpenedWords: '[]',
+        QuizResult: '',
+        Source: data.force ? 'manual-regenerate' : 'auto',
+      };
+      lock.waitLock(10000);
+      const psh = getPassagesSheet_();
+      const pmap = headerMap_(psh);
+      appendPassageRow_(psh, pmap, passage);
+      invalidatePassagesCache_();
+      return json_({ ok: true, passage: passage });
     }
 
     lock.waitLock(10000);
