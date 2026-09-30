@@ -710,6 +710,43 @@ async function fetchAllRows(force) {
   return allRowsCache;
 }
 
+// Passages: same caching shape as fetchAllRows above, but its own cache
+// variables/key so passage-list caching can never interfere with Words
+// caching. Demo-mode passages (read-only, migrated history only — Demo mode
+// has no generate path) are shaped down to the same light list view the
+// server's ?passages=1 already returns, so callers never need to branch.
+let allPassagesCache = null;
+let allPassagesCacheAt = 0;
+function invalidatePassagesCache() { allPassagesCache = null; }
+function passageListView_(p) {
+  return {
+    Id: p[PID], Created: p[PCREATED], Status: p[PSTATUS], Title: p[PTITLE],
+    Level: p[PLEVEL], WordCount: p[PWORDCOUNT],
+    RequestedCount: safeJson(p[PREQ], []).length,
+    OpenedCount: safeJson(p[POPENED], []).length,
+    QuizResult: p[PQUIZRESULT],
+  };
+}
+async function apiListPassages(force) {
+  if (!apiUrl) return safeJson(store.get(DEMO_PASSAGES_KEY, ''), []).map(passageListView_);
+  if (!force && allPassagesCache && (Date.now() - allPassagesCacheAt) < ALL_ROWS_TTL_MS) return allPassagesCache;
+  const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'passages=1');
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'Could not load passages');
+  allPassagesCache = data.passages; allPassagesCacheAt = Date.now();
+  return allPassagesCache;
+}
+async function apiGetPassage(id) {
+  if (!apiUrl) {
+    const demo = safeJson(store.get(DEMO_PASSAGES_KEY, ''), []);
+    return demo.find(p => p[PID] === id) || null;
+  }
+  const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'passage=' + encodeURIComponent(id));
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'Passage not found');
+  return data.passage;
+}
+
 // Strict "does this word already exist" lookup — unlike clientMatches (used for
 // free-text search, which matches substrings) this only returns a hit for an
 // exact saved word, an exact saved inflected form, or a stem match, so typing
@@ -1440,6 +1477,15 @@ const READING_COUNT_OPTIONS = [4, 6, 8, 10, 12, 15];
 const READING_COUNT_DEFAULT = 10;
 const READING_HISTORY_MAX = 20;
 
+// Column-name constants for the new Passages entity (saved AI reading
+// passages with target words + a quiz) — mirrors the FORM_COLS/W,PR,POS,...
+// pattern above (line ~617) and code.gs's PASSAGES_HEADERS exactly: rows are
+// always keyed by these header-name strings, both server-side (Connected
+// mode) and in the Demo-mode local fallback below.
+const PASSAGE_COLS = ['Id', 'Created', 'Status', 'Title', 'Level', 'WordCount', 'Paragraphs',
+  'Targets', 'Quiz', 'RequestedWords', 'OpenedWords', 'QuizResult', 'Source'];
+const [PID, PCREATED, PSTATUS, PTITLE, PLEVEL, PWORDCOUNT, PPARAS, PTARGETS, PQUIZ, PREQ, POPENED, PQUIZRESULT, PSOURCE] = PASSAGE_COLS;
+
 function readingCount() {
   const n = parseInt(store.get('ordbok_reading_count', ''), 10);
   return READING_COUNT_OPTIONS.includes(n) ? n : READING_COUNT_DEFAULT;
@@ -1459,6 +1505,104 @@ function loadReadingHistory() {
   return [];
 }
 function saveReadingHistory(h) { store.set('ordbok_reading_history', JSON.stringify(h.slice(0, READING_HISTORY_MAX))); }
+
+// ---- Passages migration ----
+// One-time upgrade of the old local reading history (above) into the new
+// Passages entity. Runs once per device, fire-and-forget at startup (see
+// migratePassagesIfNeeded, called from the bottom of this script); never
+// mutates ordbok_reading_history itself, so a failed/partial run is always
+// safe to retry on the next launch.
+const PASSAGES_MIGRATED_KEY = 'ordbok_passages_migrated';
+const DEMO_PASSAGES_KEY = 'ordbok_demo_passages';
+
+// Re-locates each `wordsUsed` entry from a legacy history entry inside its
+// own paragraphs (an exact-or-stemmed match, same idea as clientMatches/
+// buildReadingHtml use elsewhere, just scanning one word at a time rather
+// than building a highlight map) to derive a Targets array with a surface +
+// paragraphIndex. A word that can't be re-located (edited/deleted since) is
+// dropped, not guessed.
+function legacyPassageTargets_(paragraphs, wordsUsed, allRows) {
+  const targets = [];
+  (wordsUsed || []).forEach(w => {
+    const lw = (w || '').toLowerCase();
+    if (!lw) return;
+    const row = allRows.find(r => r[W].toLowerCase() === lw);
+    const wantStem = stemWord(lw);
+    for (let pi = 0; pi < paragraphs.length; pi++) {
+      const tokens = paragraphs[pi].match(/[\p{L}]+/gu) || [];
+      const hit = tokens.find(tok => {
+        const ltok = tok.toLowerCase();
+        return ltok === lw || stemWord(ltok) === wantStem;
+      });
+      if (hit) {
+        targets.push({ wordId: lw, lemma: lw, surface: hit, paragraphIndex: pi, pos: row ? row[POS] : '' });
+        break;
+      }
+    }
+  });
+  return targets;
+}
+
+// Upgrades one legacy ordbok_reading_history entry (shape: {id, date,
+// apiUrl, requested, words, text, wordsUsed}) into the new Passage shape
+// (PASSAGE_COLS). No quiz ever existed for these, so they're permanently
+// read-only history — Status 'archived' keeps them out of any future
+// #read/<id>/quiz route.
+function upgradeLegacyPassage_(entry, allRows) {
+  const paragraphs = (entry.text || '').trim().split(/\n{2,}/).filter(Boolean);
+  const targets = legacyPassageTargets_(paragraphs, entry.wordsUsed, allRows);
+  const titleWords = (paragraphs[0] || '').split(/\s+/).filter(Boolean);
+  const title = titleWords.slice(0, 6).join(' ') + (titleWords.length > 6 ? '…' : '');
+  return {
+    [PID]: entry.id || new Date().toISOString(),
+    [PCREATED]: entry.id || entry.date || new Date().toISOString(),
+    [PSTATUS]: 'archived',
+    [PTITLE]: title || 'Reading passage',
+    [PLEVEL]: '',
+    [PWORDCOUNT]: String(paragraphs.join(' ').split(/\s+/).filter(Boolean).length),
+    [PPARAS]: JSON.stringify(paragraphs),
+    [PTARGETS]: JSON.stringify(targets),
+    [PQUIZ]: '[]',
+    [PREQ]: JSON.stringify(entry.words || []),
+    [POPENED]: '[]',
+    [PQUIZRESULT]: '',
+    [PSOURCE]: 'migrated',
+  };
+}
+
+// Connected mode: uploads every upgraded legacy passage via the
+// 'importPassage' action (the server no-ops on an Id it already has, so a
+// partial/retried run is safe) and only then sets the migrated flag.
+async function migrateConnectedPassages_() {
+  const history = loadReadingHistory();
+  if (!history.length) { store.set(PASSAGES_MIGRATED_KEY, '1'); return; }
+  let allRows = [];
+  try { allRows = await fetchAllRows(false); } catch (e) { /* fine — legacy targets just won't carry a POS */ }
+  for (const entry of history) {
+    const passage = upgradeLegacyPassage_(entry, allRows);
+    await post({ action: 'importPassage', passage });
+  }
+  store.set(PASSAGES_MIGRATED_KEY, '1');
+}
+
+// Demo mode: no server to upload to — upgrades into a new, separate
+// localStorage key, never touching/mutating ordbok_reading_history itself.
+function migrateDemoPassages_() {
+  if (store.get(DEMO_PASSAGES_KEY, '')) return;
+  const history = loadReadingHistory();
+  const upgraded = history.map(entry => upgradeLegacyPassage_(entry, []));
+  store.set(DEMO_PASSAGES_KEY, JSON.stringify(upgraded));
+}
+
+// Entry point, called once at startup (bottom of this script). Fire-and-
+// forget: a failure (e.g. offline) just leaves the migrated flag unset, so
+// it's retried on the next launch; it never blocks or breaks the Read tab
+// (still the pre-rewrite version, as of this phase) in the meantime.
+async function migratePassagesIfNeeded() {
+  if (!apiUrl) { migrateDemoPassages_(); return; }
+  if (store.get(PASSAGES_MIGRATED_KEY, '')) return;
+  try { await migrateConnectedPassages_(); } catch (e) { /* retry on next launch */ }
+}
 
 // Id of the passage currently on screen, so the history list can mark it.
 let readingCurrentId = null;
@@ -2085,6 +2229,7 @@ $('openPinFromSettings').addEventListener('click', async () => {
 renderModePill();
 renderThemeBtn();
 setView('search');
+migratePassagesIfNeeded();   // fire-and-forget; see its own comment above
 </script>
 </body>
 </html>

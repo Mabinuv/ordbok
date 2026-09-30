@@ -38,6 +38,36 @@ const HEADERS = [
   'Source',             // free text: where/how the word was encountered (also grounds the AI example sentence)
 ];
 
+/**
+ * Passages tab: saved AI-generated reading passages (story + target words +
+ * quiz) for the Read tab. A second, independent sheet tab from Words — a
+ * passage references many words and a word appears in many passages, so this
+ * is a different entity, not more Words columns. Same create-on-first-use /
+ * append-missing-header-by-name migration pattern as getSheet_() below
+ * (see getPassagesSheet_), reusing headerMap_() unchanged since it's already
+ * generic over whatever sheet is passed to it.
+ */
+const PASSAGES_SHEET_NAME = 'Passages';
+const PASSAGES_HEADERS = [
+  'Id',               // ISO timestamp string — same id scheme the client already used for reading-history entries
+  'Created',          // ISO timestamp, kept as its own column so opening the Sheet doesn't require parsing Id
+  'Status',           // 'ready' | 'archived' — no client-only transient state (loading/error) is ever persisted here
+  'Title',
+  'Level',
+  'WordCount',
+  'Paragraphs',       // JSON array of strings, one per paragraph
+  'Targets',          // JSON array of {wordId, lemma, surface, paragraphIndex, pos} — wordId is just the lemma;
+                       // there's no separate word-id concept anywhere in this app, rows are keyed by headword
+  'Quiz',             // JSON array of {prompt, options, answerIndex, wordId}
+  'RequestedWords',   // JSON array of the headwords fed into the generation prompt
+  'OpenedWords',      // JSON array, append-only/de-duped — words the user has tapped open in the reading side panel
+  'QuizResult',       // JSON {score, total, answers, completedAt}, or '' if the quiz hasn't been taken yet
+  'Source',           // 'auto' | 'manual-regenerate' | 'migrated'
+];
+// Separate from SEARCH_CACHE_SECONDS' 'rows_v1' key so Words and Passages
+// caching never interfere with each other.
+const PASSAGES_CACHE_KEY = 'passages_v1';
+
 // ---- Auto-fill settings: check these two match what you use ----
 const PROVIDER = 'openai';                       // 'openai' or 'gemini'
 const OPENAI_MODEL = 'gpt-5.4-mini';
@@ -269,6 +299,29 @@ function getSheet_() {
   return sh;
 }
 
+// Same as getSheet_() above, but for the Passages tab — identical create-on-
+// first-use / append-missing-header-by-name logic, just a different sheet
+// name and header list. Kept as its own function rather than parameterizing
+// getSheet_() itself, so a change to one never risks the other.
+function getPassagesSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(PASSAGES_SHEET_NAME);
+  if (!sh) sh = ss.insertSheet(PASSAGES_SHEET_NAME);
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(PASSAGES_HEADERS);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, PASSAGES_HEADERS.length).setFontWeight('bold');
+    return sh;
+  }
+  const lastCol = sh.getLastColumn();
+  const existing = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+  const missing = PASSAGES_HEADERS.filter(h => existing.indexOf(h) === -1);
+  if (missing.length) {
+    sh.getRange(1, lastCol + 1, 1, missing.length).setValues([missing]).setFontWeight('bold');
+  }
+  return sh;
+}
+
 // Maps header name -> 1-based column index, using the sheet's actual header row.
 function headerMap_(sh) {
   const lastCol = sh.getLastColumn();
@@ -311,6 +364,68 @@ function readAll_() {
 
 function invalidateCache_() {
   try { CacheService.getScriptCache().remove('rows_v1'); } catch (e) {}
+}
+
+// Same caching shape as readAll_()/invalidateCache_() above, but for the
+// Passages tab, under its own cache key (PASSAGES_CACHE_KEY) — a deliberate
+// parallel function rather than a generalized/parameterized readAll_(), so a
+// change to one read path can never accidentally affect the other's cache key.
+function readAllPassages_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(PASSAGES_CACHE_KEY);
+  if (cached) {
+    try { return JSON.parse(cached); } catch (e) { /* fall through to re-read */ }
+  }
+  const sh = getPassagesSheet_();
+  const map = headerMap_(sh);
+  const lastCol = sh.getLastColumn();
+  const values = sh.getRange(1, 1, sh.getLastRow(), lastCol).getValues();
+  const idCol = map['Id'] - 1;
+  const rows = values.slice(1)
+    .filter(r => String(r[idCol]).trim() !== '')
+    .map(r => {
+      const o = {};
+      PASSAGES_HEADERS.forEach(h => { const c = map[h]; o[h] = c ? String(r[c - 1] == null ? '' : r[c - 1]) : ''; });
+      return o;
+    });
+  try { cache.put(PASSAGES_CACHE_KEY, JSON.stringify(rows), SEARCH_CACHE_SECONDS); } catch (e) { /* row set too large to cache — fine, just slower */ }
+  return rows;
+}
+
+function invalidatePassagesCache_() {
+  try { CacheService.getScriptCache().remove(PASSAGES_CACHE_KEY); } catch (e) {}
+}
+
+// Same shape as findRow_() below, but matches the Passages tab's 'Id' column
+// instead of 'Swedish Word'. Ids are timestamp strings, not user-typed text,
+// so this compares as-is (trimmed) rather than lowercasing.
+function findPassageRow_(sh, id) {
+  const target = String(id == null ? '' : id).trim();
+  if (!target) return -1;
+  const map = headerMap_(sh);
+  const idCol = map['Id'];
+  if (!idCol) return -1;
+  const ids = sh.getRange(1, idCol, sh.getLastRow(), 1).getValues();
+  for (let i = 1; i < ids.length; i++) {
+    if (String(ids[i][0]).trim() === target) return i + 1;
+  }
+  return -1;
+}
+
+// Appends a full Passage object (keyed by PASSAGES_HEADERS names, with any
+// JSON array/object fields already JSON.stringify'd by the caller) as a new
+// row. Shared by the one-time client migration ('importPassage' below) and,
+// later, passage generation — both just need "write a fully-formed passage
+// row", never a partial one, so one append helper covers both.
+function appendPassageRow_(sh, map, passage) {
+  const lastCol = sh.getLastColumn();
+  const rowValues = new Array(lastCol).fill('');
+  PASSAGES_HEADERS.forEach(h => {
+    const c = map[h]; if (!c) return;
+    const v = passage[h];
+    rowValues[c - 1] = v === undefined || v === null ? '' : String(v);
+  });
+  sh.getRange(sh.getLastRow() + 1, 1, 1, lastCol).setValues([rowValues]);
 }
 
 function findRow_(sh, word) {
@@ -404,14 +519,34 @@ function rowMatchesQuery_(row, q, qStem) {
   return false;
 }
 
-// GET  ?meta=1   -> { ok, provider, model } for the currently configured auto-fill model
-// GET  ?q=hund    -> search (Swedish word, English meaning, or any saved inflected form).
-//                    Matches "flygplatserna" against a row saved as "flygplats". No q -> all rows.
+// GET  ?meta=1       -> { ok, provider, model } for the currently configured auto-fill model
+// GET  ?passages=1   -> { ok, passages } — light list (no Paragraphs/Targets/Quiz) for the Read library screen
+// GET  ?passage=<id> -> { ok, passage } — one full passage, incl. Paragraphs/Targets/Quiz, for reading/quiz screens
+// GET  ?q=hund       -> search (Swedish word, English meaning, or any saved inflected form).
+//                       Matches "flygplatserna" against a row saved as "flygplats". No q -> all rows.
 function doGet(e) {
   try {
     const p = (e && e.parameter) || {};
     if (p.meta) {
       return json_({ ok: true, provider: PROVIDER, model: PROVIDER === 'gemini' ? GEMINI_MODEL : OPENAI_MODEL });
+    }
+    if (p.passages) {
+      const list = readAllPassages_().map(function (row) {
+        return {
+          Id: row.Id, Created: row.Created, Status: row.Status, Title: row.Title,
+          Level: row.Level, WordCount: row.WordCount,
+          RequestedCount: safeParseArr_(row.RequestedWords).length,
+          OpenedCount: safeParseArr_(row.OpenedWords).length,
+          QuizResult: row.QuizResult,
+        };
+      });
+      return json_({ ok: true, passages: list });
+    }
+    if (p.passage) {
+      const target = String(p.passage).trim();
+      const found = readAllPassages_().find(function (row) { return row.Id === target; });
+      if (!found) return json_({ ok: false, error: 'Passage not found' });
+      return json_({ ok: true, passage: found });
     }
     const q = norm_(p.q || '');
     let rows = readAll_();
@@ -430,6 +565,8 @@ function doGet(e) {
 //                                                    (savedEntry = check mode: also returns Verdict/Issues)
 //   { action: 'delete', word }                   -> remove the word's row
 //   { action: 'generateReading', words }         -> LLM writes a short passage using the given due words
+//   { action: 'importPassage', passage }         -> append an already-built Passage row (one-time client migration
+//                                                    of the old local reading history; no-ops if its Id already exists)
 //   { action: 'setLearned', word, learned }      -> tick / untick the Learned column
 //   { action: 'updateReview', word, reviewState } -> overwrite the Review State column (spaced repetition)
 //   { 'Swedish Word': ..., ... }                 -> add a word, or update it if it exists
@@ -452,6 +589,25 @@ function doPost(e) {
     }
     if (data.action === 'generateReading') {
       return json_(generateReading_(Array.isArray(data.words) ? data.words : []));
+    }
+
+    // Unlike the two branches above, this one writes to the Sheet (the
+    // Passages tab, not Words), so it needs the lock — but only around its
+    // own append step, never the Words-sheet lock/getSheet_() call below.
+    if (data.action === 'importPassage') {
+      const passage = data.passage && typeof data.passage === 'object' ? data.passage : null;
+      if (!passage || !String(passage.Id || '').trim()) return json_({ ok: false, error: 'A passage with an Id is required' });
+      lock.waitLock(10000);
+      const psh = getPassagesSheet_();
+      const pmap = headerMap_(psh);
+      if (findPassageRow_(psh, passage.Id) > 0) {
+        // Already imported (e.g. a retried migration after a partial earlier
+        // failure) — treat as success, not an error, so retries are safe.
+        return json_({ ok: true, passage: passage, action: 'skipped' });
+      }
+      appendPassageRow_(psh, pmap, passage);
+      invalidatePassagesCache_();
+      return json_({ ok: true, passage: passage, action: 'imported' });
     }
 
     lock.waitLock(10000);
