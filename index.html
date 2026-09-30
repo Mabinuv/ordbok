@@ -353,6 +353,28 @@ applyTheme(store.get('ordbok_theme', ''));
   .rd-panel { flex: 0 1 320px; min-width: 260px; position: sticky; top: 16px; background: var(--card); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px; }
   .rd-panel-close { float: right; width: 36px; height: 36px; border-radius: var(--radius); border: 0; background: var(--sand); color: var(--ink); cursor: pointer; }
   .rd-panel-word { font: 600 26px var(--serif); margin: 0 8px 12px 0; clear: both; }
+  .rd-panel-grade { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 16px; }
+  .rd-panel-grade button { min-height: 44px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 600; cursor: pointer; }
+  .rd-quiz-teaser { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; }
+  .rd-quiz-teaser strong { font-size: 16px; }
+
+  /* Quiz + results */
+  .rd-quiz-card { display: flex; flex-direction: column; gap: 18px; max-width: 640px; margin: 16px auto 0; border-radius: var(--radius-lg); }
+  .rd-quiz-prompt { font: 500 24px var(--serif); line-height: 1.3; }
+  .rd-quiz-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .rd-quiz-option { min-height: 56px; padding: 0 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 15px; font-weight: 500; text-align: left; cursor: pointer; }
+  .rd-quiz-option.correct { background: color-mix(in srgb, var(--ok) 16%, var(--card)); border-color: var(--ok); color: var(--ok); font-weight: 700; }
+  .rd-quiz-option.wrong { background: color-mix(in srgb, var(--berry) 14%, var(--card)); border-color: var(--berry); color: var(--berry); font-weight: 700; }
+  .rd-quiz-option.faded { opacity: .6; }
+  .rd-quiz-feedback { border-radius: 14px; padding: 14px 16px; font-weight: 600; }
+  .rd-quiz-feedback.correct { background: color-mix(in srgb, var(--ok) 14%, var(--card)); color: var(--ok); }
+  .rd-quiz-feedback.wrong { background: color-mix(in srgb, var(--berry) 12%, var(--card)); color: var(--berry); }
+  .rd-quiz-results { max-width: 560px; margin: 16px auto 0; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; border-radius: var(--radius-lg); }
+  .rd-quiz-score { width: 110px; height: 110px; border-radius: 999px; background: var(--sand); display: flex; align-items: center; justify-content: center; font: 600 30px var(--serif); }
+  .rd-quiz-results h2 { font: 600 26px var(--serif); margin: 0; }
+  .rd-quiz-missed { width: 100%; text-align: left; background: var(--sand); box-shadow: none; }
+  .rd-quiz-missed-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .rd-quiz-missed-row:first-of-type { border-top: 0; margin-top: 8px; }
 
   /* ---------- Dialogs ---------- */
   dialog { border: 0; border-radius: var(--radius); background: var(--card); color: var(--ink); box-shadow: var(--shadow); max-width: 520px; width: calc(100% - 32px); padding: 24px; }
@@ -776,6 +798,22 @@ async function apiGeneratePassage(words, level, signal) {
   const data = await post({ action: 'generatePassage', words, level }, false, signal);
   invalidatePassagesCache();
   return data.passage;
+}
+// patch: { openedWords?, quizResult?, status? } — same targeted-patch shape
+// either mode uses; never touches paragraphs/targets/quiz themselves.
+async function apiUpdatePassage(id, patch) {
+  if (!apiUrl) { demoUpdatePassage_(id, patch); return; }
+  await post({ action: 'updatePassage', id, patch });
+  invalidatePassagesCache();
+}
+function demoUpdatePassage_(id, patch) {
+  const demo = safeJson(store.get(DEMO_PASSAGES_KEY, ''), []);
+  const row = demo.find(p => p[PID] === id);
+  if (!row) return;
+  if (patch.openedWords !== undefined) row[POPENED] = JSON.stringify(patch.openedWords);
+  if (patch.quizResult !== undefined) row[PQUIZRESULT] = patch.quizResult ? JSON.stringify(patch.quizResult) : '';
+  if (patch.status !== undefined) row[PSTATUS] = patch.status;
+  store.set(DEMO_PASSAGES_KEY, JSON.stringify(demo));
 }
 
 // Strict "does this word already exist" lookup — unlike clientMatches (used for
@@ -1656,6 +1694,7 @@ const R = {
   current: null,          // full parsed Passage (parsePassage), for reading/quiz/results
   setup: { count: readingCount(), level: store.get('ordbok_reading_level', '') || 'A2' },
   abort: null,            // AbortController for an in-flight apiGeneratePassage call
+  quizIndex: 0, quizChoice: null, quizCorrect: 0, quizMissedLemmas: [],   // in-progress quiz state
 };
 
 // Converts one raw sheet-shaped passage row (JSON-string fields, see
@@ -1684,6 +1723,8 @@ function fmtDate(iso) {
 // whichever screen was last active rather than resetting to the library.
 function enterReadTab() {
   if (R.screen === 'reading' && R.current) renderReadReading(R.current);
+  else if (R.screen === 'quiz' && R.current && R.current.quiz.length) renderReadQuiz();
+  else if (R.screen === 'results' && R.current) backToReading();   // mid-results on tab-away/back: just resume reading
   else if (R.screen === 'setup' && apiUrl) renderReadSetup();
   else goToLibrary();
 }
@@ -1823,46 +1864,218 @@ async function handleGenerate() {
 // tappable button — unlike the old span-based .rd-word, a real <button> per
 // the spec's accessibility requirements (still visually inline via CSS).
 // Punctuation naturally stays outside, since \p{L} only matches letters.
+// Carries the surface/paragraph index too, since openWordPanel needs both to
+// find the source sentence for a not-yet-saved word's AI lookup.
 function highlightParagraph(text, pIdx, passage) {
   return esc(text).replace(/[\p{L}]+/gu, tok => {
     const lw = tok.toLowerCase();
     const t = passage.targets.find(t => t.paragraphIndex === pIdx && t.surface.toLowerCase() === lw);
     if (!t) return tok;
-    return '<button type="button" class="rd-word" data-action="word" data-lemma="' + esc(t.lemma) + '">' + tok + '</button>';
+    return '<button type="button" class="rd-word" data-action="word" data-lemma="' + esc(t.lemma) +
+      '" data-surface="' + esc(t.surface) + '" data-pidx="' + pIdx + '">' + tok + '</button>';
   });
 }
 function renderReadReading(passage) {
   const html = passage.paragraphs.map((p, i) => '<p>' + highlightParagraph(p, i, passage) + '</p>').join('');
+  const quizTeaser = !passage.quiz.length ? '' :
+    '<div class="panel rd-quiz-teaser"><div><strong>Finished reading?</strong><p class="rd-lib-sub">' +
+    esc(passage.quizResult
+      ? 'Last score ' + passage.quizResult.score + '/' + passage.quizResult.total + '. Retake it to lock the words in.'
+      : passage.quiz.length + ' quick questions on the words and the story. Missed words go to Practice.') +
+    '</p></div><button type="button" class="primary" data-action="start-quiz">Take the quiz</button></div>';
   $('readingBody').innerHTML =
     '<button type="button" class="link" data-action="to-library">← All passages</button>' +
     '<div class="rd-reading-layout">' +
+    '<div style="flex:1 1 560px;min-width:0;display:flex;flex-direction:column;gap:20px">' +
     '<article class="panel rd-passage" lang="sv">' +
     '<h2>' + esc(passage.title) + '</h2>' +
     '<p class="rd-caption">' + esc(passage.level || '') + (passage.wordCount ? ' · ' + esc(String(passage.wordCount)) + ' words' : '') + '</p>' +
-    html + '</article>' +
+    html + '</article>' + quizTeaser +
+    '</div>' +
     '<aside id="rdPanel" class="rd-panel" hidden></aside>' +
     '</div>';
 }
 
-// Side panel — phase 3 shows read-only word info; grading/"save to my
-// words"/opened-word persistence are added in phase 4 once the backend
-// 'updatePassage' action exists.
-async function openWordPanel(lemma) {
+// Splits `paragraph` into rough sentences and returns the first one
+// containing `surface` (case-insensitive), or the whole paragraph if none
+// match (e.g. a one-sentence paragraph) — grounds a not-yet-saved word's AI
+// lookup the same way the edit dialog's autofill() grounds its example via
+// the typed source sentence (index.html's editor autofill, not reused here
+// since that flow is tied to #editDialog's own form fields).
+function sentenceContaining(paragraph, surface) {
+  const sentences = paragraph.match(/[^.!?]+[.!?]*/g) || [paragraph];
+  const lw = surface.toLowerCase();
+  const hit = sentences.find(s => s.toLowerCase().indexOf(lw) !== -1);
+  return (hit || paragraph).trim();
+}
+
+// Side panel: known word -> entryBodyHtml() + grading (the nextReviewState +
+// apiUpdateReview two-line primitive Practice's answer() itself uses, called
+// directly here since answer() is hardwired to the Practice deck's P state,
+// not an arbitrary row). Not-yet-saved word -> the Search tab's no-dialog
+// pendingRow-style AI lookup (saveWordFromPanel below), grounded with a real
+// source sentence (unlike lookupWord's hardcoded '').
+async function openWordPanel(lemma, surface, pidx) {
   const panel = $('rdPanel');
   if (!panel) return;
   panel.hidden = false;
   panel.innerHTML = '<p class="empty">Loading…</p>';
+
+  if (R.current && R.current.openedWords.indexOf(lemma) === -1) {
+    R.current.openedWords = R.current.openedWords.concat([lemma]);
+    apiUpdatePassage(R.current.id, { openedWords: R.current.openedWords }).catch(e => { /* non-blocking — just a progress stat */ });
+  }
+
   let row = null;
   try { const rows = await fetchAllRows(false); row = findExistingRow(rows, lemma); } catch (e) { /* fall through to "not in your words" */ }
   const closeBtn = '<button type="button" class="rd-panel-close" data-action="close-panel" aria-label="Close word details">✕</button>';
   if (row) {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(row[W]) + '</div>' + posChipHtml(row) + entryBodyHtml(row);
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(row[W]) + '</div>' + posChipHtml(row) + entryBodyHtml(row) +
+      '<div class="rd-panel-grade">' +
+      '<button type="button" data-action="grade" data-knew="0" data-lemma="' + esc(lemma) + '">Still learning</button>' +
+      '<button type="button" data-action="grade" data-knew="1" data-lemma="' + esc(lemma) + '">I know it</button>' +
+      '</div>';
+  } else if (!apiUrl) {
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(lemma) + '</div>' +
+      '<p class="rd-lib-sub">Not in your words yet. Connect a Google Sheet to look it up and save it — see Settings.</p>';
   } else {
     panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(lemma) + '</div>' +
-      '<p class="rd-lib-sub">Not in your words yet.</p>';
+      '<p class="rd-lib-sub">Not in your words yet.</p>' +
+      '<button type="button" class="primary" data-action="save-word" data-lemma="' + esc(lemma) + '" data-surface="' + esc(surface) + '" data-pidx="' + pidx + '">Save to my words</button>';
   }
 }
 function closePanel() { const panel = $('rdPanel'); if (panel) panel.hidden = true; }
+
+async function gradeWordFromPanel(lemma, knew) {
+  let row = null;
+  try { const rows = await fetchAllRows(false); row = findExistingRow(rows, lemma); } catch (e) {}
+  if (!row) return;
+  const st = nextReviewState(reviewState(row), knew);
+  row[RS] = JSON.stringify(st);
+  apiUpdateReview(row[W], st).catch(e => { /* non-blocking, same tolerance as Practice's answer() */ });
+  const box = document.querySelector('#rdPanel .rd-panel-grade');
+  if (box) box.innerHTML = '<p class="rd-lib-sub">' + (knew ? 'Marked as known.' : 'Marked as still learning.') + '</p>';
+}
+
+// Mirrors the Search tab's no-dialog lookupWord()/saveSearchResult() flow
+// (index.html ~1121-1207) — a pendingRow built from the autofill response,
+// saved via apiSave() — but grounded with the passage's own sentence instead
+// of lookupWord's hardcoded empty sourceSentence.
+async function saveWordFromPanel(lemma, surface, pidx) {
+  const panel = $('rdPanel');
+  const btn = panel && panel.querySelector('[data-action="save-word"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const paragraph = (R.current && R.current.paragraphs[pidx]) || '';
+    const sourceSentence = paragraph ? sentenceContaining(paragraph, surface) : '';
+    const data = await post({ action: 'autofill', word: lemma, sourceSentence });
+    const f = data.fields || {};
+    if (notRecognised(f)) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Save to my words'; }
+      if (panel) panel.insertAdjacentHTML('beforeend', '<p class="rd-lib-sub">AI didn’t recognise this as Swedish.</p>');
+      return;
+    }
+    const finalLemma = String(f['Dictionary Form'] || '').trim() || lemma;
+    const row = {};
+    FORM_COLS.forEach(c => row[c] = '');
+    AI_FORM_COLS.forEach(c => row[c] = String(f[c] || '').trim());
+    row[W] = finalLemma;
+    row[GF] = JSON.stringify(parseForms(f[GF]));
+    if (finalLemma.toLowerCase() !== lemma.toLowerCase()) row[SEEN] = JSON.stringify([lemma.toLowerCase()]);
+    await apiSave(row);
+    refreshDueLine();
+    if (btn) btn.outerHTML = '<p class="rd-lib-sub">✓ Saved to my words.</p>';
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save to my words'; }
+    if (panel) panel.insertAdjacentHTML('beforeend', '<p class="rd-lib-sub">Could not save: ' + esc(e.message) + '</p>');
+  }
+}
+
+// ---- Quiz + results ----
+function goToQuiz() {
+  if (!R.current || !R.current.quiz.length) return;
+  R.screen = 'quiz'; R.quizIndex = 0; R.quizChoice = null; R.quizCorrect = 0; R.quizMissedLemmas = [];
+  renderReadQuiz();
+}
+function backToReading() { R.screen = 'reading'; renderReadReading(R.current); }
+function renderReadQuiz() {
+  const passage = R.current;
+  const total = passage.quiz.length;
+  const q = passage.quiz[R.quizIndex];
+  const optsHtml = q.options.map((o, i) => {
+    let cls = 'rd-quiz-option', mark = '';
+    if (R.quizChoice !== null) {
+      if (i === q.answerIndex) { cls += ' correct'; mark = ' ✓'; }
+      else if (i === R.quizChoice) { cls += ' wrong'; mark = ' ✗'; }
+      else cls += ' faded';
+    }
+    return '<button type="button" class="' + cls + '" data-action="quiz-pick" data-i="' + i + '"' + (R.quizChoice !== null ? ' disabled' : '') + '>' + esc(o) + mark + '</button>';
+  }).join('');
+  let feedback = '';
+  if (R.quizChoice !== null) {
+    const correct = R.quizChoice === q.answerIndex;
+    feedback = '<div class="rd-quiz-feedback ' + (correct ? 'correct' : 'wrong') + '">' +
+      (correct ? 'Correct!' : 'Not quite. The answer is “' + esc(q.options[q.answerIndex]) + '”.') + '</div>' +
+      '<button type="button" class="primary" data-action="quiz-next">' + (R.quizIndex + 1 < total ? 'Next question' : 'See results') + '</button>';
+  }
+  $('readingBody').innerHTML =
+    '<div class="rd-setup-actions" style="justify-content:space-between;border:0;padding:0">' +
+    '<button type="button" class="link" data-action="back-to-reading">← Back to the story</button>' +
+    '<span class="rd-caption">Question ' + (R.quizIndex + 1) + ' of ' + total + '</span></div>' +
+    '<div class="panel rd-quiz-card">' +
+    '<div class="rd-caption">' + (q.wordId ? 'Vocabulary' : 'Understanding') + '</div>' +
+    '<div class="rd-quiz-prompt" lang="sv">' + esc(q.prompt) + '</div>' +
+    '<div class="rd-quiz-options">' + optsHtml + '</div>' + feedback + '</div>';
+}
+function answerQuiz(i) {
+  if (R.quizChoice !== null) return;
+  const q = R.current.quiz[R.quizIndex];
+  R.quizChoice = i;
+  if (i === q.answerIndex) R.quizCorrect++;
+  else if (q.wordId) R.quizMissedLemmas.push(q.wordId);
+  renderReadQuiz();
+}
+async function nextQuizQuestion() {
+  if (R.quizIndex + 1 < R.current.quiz.length) { R.quizIndex++; R.quizChoice = null; renderReadQuiz(); return; }
+  // Missed word-questions go to "still learning" in the SRS, same primitive
+  // the panel's grading buttons and Practice's answer() use.
+  const uniqueMissed = Array.from(new Set(R.quizMissedLemmas));
+  let allRows = [];
+  try { allRows = await fetchAllRows(false); } catch (e) {}
+  for (const lemma of uniqueMissed) {
+    const row = findExistingRow(allRows, lemma);
+    if (!row) continue;
+    const st = nextReviewState(reviewState(row), false);
+    row[RS] = JSON.stringify(st);
+    try { await apiUpdateReview(row[W], st); } catch (e) { /* non-blocking */ }
+  }
+  const result = { score: R.quizCorrect, total: R.current.quiz.length, missed: uniqueMissed, completedAt: new Date().toISOString() };
+  R.current.quizResult = result;
+  try { await apiUpdatePassage(R.current.id, { quizResult: result, status: 'done' }); } catch (e) { /* score still shows this session even if the save failed */ }
+  R.screen = 'results';
+  renderReadResults(result, allRows);
+}
+function renderReadResults(result, allRows) {
+  const total = result.total;
+  const title = result.score === total ? 'Perfect. Every word stuck.' : result.score >= total - 1 ? 'Nicely done' : 'Good practice';
+  const missedHtml = !result.missed.length ? '' :
+    '<div class="panel rd-quiz-missed"><strong>Added to Practice as “Still learning”</strong>' +
+    result.missed.map(lemma => {
+      const row = findExistingRow(allRows, lemma);
+      return '<div class="rd-quiz-missed-row"><span lang="sv">' + esc(lemma) + '</span><span class="rd-caption">' + esc(row ? row[EN] : '') + '</span></div>';
+    }).join('') + '</div>';
+  $('readingBody').innerHTML =
+    '<div class="panel rd-quiz-results">' +
+    '<div class="rd-quiz-score">' + result.score + '/' + total + '</div>' +
+    '<h2>' + esc(title) + '</h2>' +
+    '<p class="rd-lib-sub">Your score is saved with “' + esc(R.current.title) + '”.</p>' +
+    missedHtml +
+    '<div class="rd-setup-actions">' +
+    '<button type="button" data-action="back-to-reading">Read again</button>' +
+    '<button type="button" data-action="to-library">All passages</button>' +
+    '<button type="button" class="primary" data-action="new-passage">New passage</button>' +
+    '</div></div>';
+}
 
 /* ================= PRACTICE VIEW ================= */
 const P = { deck: [], picks: [], i: 0, flipped: false, dir: 'sv2en', mode: 'todo', kind: 'flash', got: 0, missed: [], total: 0 };
@@ -2304,7 +2517,17 @@ $('readingBody').addEventListener('click', e => {
   const action = btn.dataset.action;
   if (action === 'new-passage') goToSetup();
   else if (action === 'to-library') goToLibrary();
-  else if (action === 'lib-filter') { R.libFilter = btn.dataset.filter; renderLibraryGrid(); }
+  else if (action === 'lib-filter') {
+    R.libFilter = btn.dataset.filter;
+    // Only the grid re-renders below (no need to re-fetch/re-render the
+    // whole library screen just to flip a filter) — so the pressed state on
+    // these pills, unlike everywhere else that re-renders its whole screen
+    // on a state change, has to be updated by hand right here.
+    btn.parentElement.querySelectorAll('button[data-action="lib-filter"]').forEach(b => {
+      b.setAttribute('aria-pressed', String(b.dataset.filter === R.libFilter));
+    });
+    renderLibraryGrid();
+  }
   else if (action === 'open-passage') goToReading(btn.dataset.id);
   else if (action === 'set-level') {
     R.setup.level = btn.dataset.level;
@@ -2313,8 +2536,28 @@ $('readingBody').addEventListener('click', e => {
   }
   else if (action === 'generate') handleGenerate();
   else if (action === 'cancel-loading') cancelGeneration();
-  else if (action === 'word') openWordPanel(btn.dataset.lemma);
+  else if (action === 'word') openWordPanel(btn.dataset.lemma, btn.dataset.surface, parseInt(btn.dataset.pidx, 10));
   else if (action === 'close-panel') closePanel();
+  else if (action === 'grade') gradeWordFromPanel(btn.dataset.lemma, btn.dataset.knew === '1');
+  else if (action === 'save-word') saveWordFromPanel(btn.dataset.lemma, btn.dataset.surface, parseInt(btn.dataset.pidx, 10));
+  else if (action === 'start-quiz') goToQuiz();
+  else if (action === 'back-to-reading') backToReading();
+  else if (action === 'quiz-pick') answerQuiz(parseInt(btn.dataset.i, 10));
+  else if (action === 'quiz-next') nextQuizQuestion();
+});
+// Quiz keyboard shortcuts: 1-4 pick an option, Enter advances once answered —
+// only active while the quiz screen is showing, so it never steals keys from
+// the other Read screens or the rest of the app.
+document.addEventListener('keydown', e => {
+  if (R.screen !== 'quiz' || $('readingView').hidden || anyDialogOpen()) return;
+  if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (['1', '2', '3', '4'].includes(e.key)) {
+    const i = Number(e.key) - 1;
+    const q = R.current && R.current.quiz[R.quizIndex];
+    if (q && i < q.options.length) answerQuiz(i);
+  } else if (e.key === 'Enter' && R.quizChoice !== null) {
+    nextQuizQuestion();
+  }
 });
 $('readingBody').addEventListener('change', e => {
   if (e.target.id === 'rdSetupCount') {

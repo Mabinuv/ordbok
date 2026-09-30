@@ -807,6 +807,8 @@ function doGet(e) {
 //                                                    the Passages tab; { ok:false, error } if generation/validation fails
 //   { action: 'importPassage', passage }         -> append an already-built Passage row (one-time client migration
 //                                                    of the old local reading history; no-ops if its Id already exists)
+//   { action: 'updatePassage', id, patch }       -> patch a passage's openedWords/quizResult/status only
+//                                                    (never its Paragraphs/Targets/Quiz)
 //   { action: 'setLearned', word, learned }      -> tick / untick the Learned column
 //   { action: 'updateReview', word, reviewState } -> overwrite the Review State column (spaced repetition)
 //   { 'Swedish Word': ..., ... }                 -> add a word, or update it if it exists
@@ -881,6 +883,35 @@ function doPost(e) {
       appendPassageRow_(psh, pmap, passage);
       invalidatePassagesCache_();
       return json_({ ok: true, passage: passage });
+    }
+
+    // Same lock-just-for-this-step pattern as importPassage/generatePassage
+    // above — targeted single-row patch on the Passages sheet, mirroring how
+    // setLearned/updateReview below do a targeted single-cell write on Words,
+    // except this touches the row's own sheet (Passages, not Words) so it
+    // can't reuse the sh/map the locked block below sets up.
+    if (data.action === 'updatePassage') {
+      const id = String(data.id || '').trim();
+      const patch = data.patch && typeof data.patch === 'object' ? data.patch : {};
+      if (!id) return json_({ ok: false, error: 'A passage id is required' });
+      lock.waitLock(10000);
+      const psh = getPassagesSheet_();
+      const pmap = headerMap_(psh);
+      const row = findPassageRow_(psh, id);
+      if (row < 0) return json_({ ok: false, error: 'Passage not found' });
+      // Only ever patches these three fields — Paragraphs/Targets/Quiz (the
+      // generated content itself) are never touched by this action.
+      if (patch.openedWords !== undefined && pmap['OpenedWords']) {
+        psh.getRange(row, pmap['OpenedWords']).setValue(JSON.stringify(Array.isArray(patch.openedWords) ? patch.openedWords : []));
+      }
+      if (patch.quizResult !== undefined && pmap['QuizResult']) {
+        psh.getRange(row, pmap['QuizResult']).setValue(patch.quizResult ? JSON.stringify(patch.quizResult) : '');
+      }
+      if (patch.status !== undefined && pmap['Status']) {
+        psh.getRange(row, pmap['Status']).setValue(String(patch.status || ''));
+      }
+      invalidatePassagesCache_();
+      return json_({ ok: true });
     }
 
     lock.waitLock(10000);
