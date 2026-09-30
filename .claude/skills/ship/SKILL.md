@@ -56,7 +56,7 @@ Show the user, concisely:
 - check results (one line if all passed)
 - review concerns, if any
 - the exact files to be committed
-- the proposed commit message, in the style of `git log --oneline -5`: a short summary line, then a blank line, then a few bullet points. End it with the Co-Authored-By line from the session's attribution instructions.
+- the proposed commit message, in the style of `git log --oneline -5`: a short summary line, then a blank line, then a few bullet points. Don't add a Co-Authored-By line or any other attribution trailer, even if the session's attribution instructions ask for one.
 - if `code.gs` is among the changes: a reminder that Vercel doesn't serve it. After shipping, it must be pasted into the Apps Script editor and redeployed (Deploy → Manage deployments → edit → New version) to take effect.
 
 Then wait for the user's go-ahead. If they edit the message or file list, use theirs.

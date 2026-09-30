@@ -45,20 +45,64 @@
   textarea { resize: vertical; min-height: 58px; }
   :is(input, select, textarea, button, summary, .pcard):focus-visible { outline: 2px solid var(--lake); outline-offset: 2px; }
 
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
   h1 { font: 600 40px/1.1 var(--serif); margin: 0; letter-spacing: -.01em; }
+  h1 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
   .sub { color: var(--muted); margin: 4px 0 0; }
   .mode { font-size: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .pill { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
   .pill.live { color: var(--ok); border-color: var(--ok); }
   .stats { margin-top: 4px; }
 
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 18px 0 22px; }
-  .tab { background: none; border: 0; padding: 10px 18px; font-weight: 600; color: var(--muted); border-bottom: 3px solid transparent; margin-bottom: -1px; }
-  .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--berry); }
+  /* ---------- Menu (replaces the old tab bar) ---------- */
+  .menu { position: relative; }
+  .menu summary {
+    list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-height: 42px;
+    padding: 8px 16px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); font-weight: 600; font-size: 15px;
+  }
+  .menu summary::-webkit-details-marker { display: none; }
+  .menu nav {
+    position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 200px; padding: 6px;
+    display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  }
+  .menu nav button { background: none; border: 0; text-align: left; padding: 10px 12px; min-height: 44px; border-radius: 6px; color: var(--ink); }
+  .menu nav button:hover { background: color-mix(in srgb, var(--lake) 8%, transparent); }
+  .menu nav button[aria-current="page"] { color: var(--lake); font-weight: 600; }
+  .menu nav hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 
-  /* ---------- Words view ---------- */
+  /* ---------- Search view (opening page) ---------- */
+  #searchView { max-width: 560px; margin: 0 auto; }
+  #searchView.idle { padding-top: 16vh; }
+  .s-hint { color: var(--muted); text-align: center; margin: 0 0 18px; }
+  #searchView:not(.idle) .s-hint { display: none; }
+  .search-bar { display: flex; gap: 8px; }
+  .search-bar input { flex: 1; min-width: 0; font: 600 22px/1.2 var(--serif); padding: 13px 16px; border-radius: 10px; background: var(--card); }
+  .search-bar button { flex: none; min-height: 50px; padding: 0 20px; border: 0; border-radius: 10px; background: var(--lake); color: var(--on-lake); font-weight: 600; }
+  .search-bar button:disabled { opacity: .55; cursor: wait; }
+  #searchView .chars { justify-content: center; margin-top: 10px; }
+  .result-card { margin-top: 18px; background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--c-other); border-radius: 12px; padding: 18px 20px; }
+  .result-card[data-pos="noun"] { border-left-color: var(--c-noun); }
+  .result-card[data-pos="verb"] { border-left-color: var(--c-verb); }
+  .result-card[data-pos="adj"] { border-left-color: var(--c-adj); }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; border: 1px solid currentColor; border-radius: 999px; padding: 1px 10px; margin-bottom: 10px; }
+  .badge.ok { color: var(--ok); }
+  .badge.new { color: var(--berry); }
+  .rc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+  .result-card .rc-head .sv { font: 600 34px/1.15 var(--serif); white-space: normal; overflow-wrap: anywhere; }
+  .result-card .rc-head .link { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; min-height: 32px; }
+  .result-card .rc-head .link svg { width: 16px; height: 16px; flex: none; }
+  .result-card .meta { margin-top: 4px; }
+  .result-card .rc-note { color: var(--muted); font-size: 14px; margin: 6px 0 0; }
+  .result-card .saverow { margin-top: 18px; }
+  #sConnect { margin-top: 4px; }
+  #sAlso { margin: 12px 0 0; font-size: 14px; color: var(--muted); }
+  #sAlso button { margin: 0 4px; }
+
+  /* ---------- My words view ---------- */
   #wordsView { display: grid; grid-template-columns: minmax(290px, 370px) 1fr; gap: 28px; align-items: start; }
+  .words-head { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; }
+  .words-head .sub { margin: 0; }
   @media (max-width: 800px) {
     #wordsView { grid-template-columns: 1fr; }
     #wordsView .panel.add { order: 2; }
@@ -115,9 +159,9 @@
   .entry .gloss { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .entry .meta { display: flex; align-items: center; gap: 8px; }
   .entry .pos { font-size: 12px; color: var(--c-other); border: 1px solid currentColor; border-radius: 999px; padding: 0 9px; white-space: nowrap; }
-  details.entry[data-pos="noun"] .pos { color: var(--c-noun); }
-  details.entry[data-pos="verb"] .pos { color: var(--c-verb); }
-  details.entry[data-pos="adj"] .pos { color: var(--c-adj); }
+  .entry[data-pos="noun"] .pos { color: var(--c-noun); }
+  .entry[data-pos="verb"] .pos { color: var(--c-verb); }
+  .entry[data-pos="adj"] .pos { color: var(--c-adj); }
   .entry .tick { color: var(--ok); font-weight: 700; }
   .entry .detail { padding: 2px 18px 16px 17px; }
   .entry .ipa { color: var(--muted); font: italic 400 18px/1.3 var(--serif); }
@@ -243,7 +287,11 @@
     .panel { padding: 16px; }
     .chars button { width: 44px; height: 42px; }
     .tools .link, .pcard > .link { padding: 6px 0; min-height: 32px; }
-    .row button, .tab, #toggleAll, #shuffleBtn { min-height: 40px; }
+    .row button, #toggleAll, #shuffleBtn { min-height: 40px; }
+    #searchView.idle { padding-top: 8vh; }
+    .search-bar button { padding: 0 16px; }
+    .result-card { padding: 16px; }
+    .result-card .rc-head .sv { font-size: 30px; }
     .pcard { padding: 22px 16px; min-height: 250px; }
     .pcard .big { font-size: 34px; }
     .pcard .big.en { font-size: 25px; }
@@ -257,30 +305,56 @@
 <body>
 <div class="wrap">
   <header>
-    <div>
-      <h1>Ordbok</h1>
-      <p class="sub">Add a Swedish word once, find it again in a second.</p>
-      <p class="sub stats" id="headerStats" hidden></p>
-    </div>
-    <div class="mode">
-      <span id="modePill" class="pill">Demo mode: saved in this browser</span>
-      <button class="link" id="settingsMenuBtn" type="button" aria-label="Settings">⚙ Settings</button>
-    </div>
+    <h1><button type="button" data-view="search">Ordbok</button></h1>
+    <details class="menu" id="menu">
+      <summary aria-label="Menu">☰ Menu</summary>
+      <nav aria-label="Pages">
+        <button type="button" data-view="search">Search</button>
+        <button type="button" data-view="words">My words</button>
+        <button type="button" data-view="practice">Practice</button>
+        <button type="button" data-view="reading">Read</button>
+        <hr>
+        <button type="button" id="settingsMenuBtn">⚙ Settings</button>
+      </nav>
+    </details>
   </header>
 
-  <div class="tabs" role="tablist">
-    <button class="tab" role="tab" id="tabWords" aria-selected="true" data-view="words">Words</button>
-    <button class="tab" role="tab" id="tabPractice" aria-selected="false" data-view="practice">Practice</button>
-    <button class="tab" role="tab" id="tabReading" aria-selected="false" data-view="reading">Read</button>
+  <!-- ===================== SEARCH (opening page) ===================== -->
+  <div id="searchView" class="idle">
+    <p class="s-hint">Look up a Swedish word. If it isn't in your sheet yet, AI fills it in and you decide whether to save it.</p>
+    <form class="search-bar" id="sForm" role="search">
+      <label for="sq" class="sr">Swedish word</label>
+      <input id="sq" type="search" lang="sv" placeholder="Type a Swedish word" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" autofocus>
+      <button id="sGo" type="submit">Search</button>
+    </form>
+    <div class="chars" data-target="sq" aria-label="Insert Swedish letter">
+      <button type="button" data-c="å">å</button>
+      <button type="button" data-c="ä">ä</button>
+      <button type="button" data-c="ö">ö</button>
+    </div>
+    <div class="result-card entry" id="sCard" hidden>
+      <div id="sResult"></div>
+      <div class="saverow">
+        <button class="primary" id="sSave" type="button" hidden>Save word</button>
+        <button class="link" id="sClear" type="button">Clear</button>
+      </div>
+    </div>
+    <p class="msg" id="sMsg" role="status" aria-live="polite"></p>
+    <button class="link" id="sConnect" type="button" hidden>Connect Google Sheet</button>
+    <p id="sAlso" hidden></p>
   </div>
 
-  <!-- ===================== WORDS ===================== -->
-  <div id="wordsView">
+  <!-- ===================== MY WORDS ===================== -->
+  <div id="wordsView" hidden>
+    <div class="words-head">
+      <p class="sub stats" id="headerStats" hidden></p>
+      <div class="mode"><span id="modePill" class="pill">Demo mode: saved in this browser</span></div>
+    </div>
     <section class="panel add" aria-labelledby="addTitle">
       <h2 id="addTitle">Add a word</h2>
       <label for="f_word" class="sr">Swedish word</label>
       <input id="f_word" class="word-input" autocomplete="off" spellcheck="false" lang="sv" placeholder="Type a Swedish word">
-      <div class="chars" aria-label="Insert Swedish letter">
+      <div class="chars" data-target="f_word" aria-label="Insert Swedish letter">
         <button type="button" data-c="å">å</button>
         <button type="button" data-c="ä">ä</button>
         <button type="button" data-c="ö">ö</button>
@@ -701,6 +775,20 @@ function formsTableHtml(forms) {
       </td></tr>`).join('') + '</tbody></table>';
 }
 
+// The body of a word entry (pronunciation, meaning, example, forms, Seen As,
+// tags) — shared by the My words list and the Search result card.
+function entryBodyHtml(r) {
+  const forms = formsTableHtml(parseForms(r[GF]));
+  const seen = parseSeenAs(r[SEEN]), tags = parseTags(r[TAGS]);
+  return `
+    ${r[PR] ? `<div class="ipa">${esc(r[PR])}</div>` : ''}
+    <p class="en">${esc(r[EN])}</p>
+    ${(r[XS] || r[XE]) ? `<p class="ex"><span class="s" lang="sv">${esc(r[XS])}</span><br><span class="e">${esc(r[XE])}</span></p>` : ''}
+    ${forms ? `<div class="forms"><h3>Forms</h3>${forms}</div>` : ''}
+    ${seen.length ? `<p class="seen">Seen as: ${esc(seen.join(', '))}</p>` : ''}
+    ${tags.length ? `<div class="tags">${tags.map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}`;
+}
+
 function speak(word) {
   if (!('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(word); u.lang = 'sv-SE'; speechSynthesis.cancel(); speechSynthesis.speak(u);
@@ -724,7 +812,125 @@ async function refreshModelInfo() {
   } catch (e) { el.hidden = true; }
 }
 
-/* ================= WORDS VIEW ================= */
+/* ================= SEARCH VIEW (opening page) ================= */
+// Look a word up in the sheet first; only if it isn't there, ask the AI and
+// hold the result in pendingRow until the user explicitly saves or clears it.
+let pendingRow = null;
+let lookupSeq = 0;            // drops responses from a lookup that's been superseded or cleared
+const whereLabel = () => apiUrl ? 'your sheet' : 'your words';
+function setSMsg(text, kind) { const m = $('sMsg'); m.textContent = text; m.className = 'msg ' + (kind || ''); }
+function hideSearchResult() {
+  $('sCard').hidden = true; $('sResult').innerHTML = ''; $('sSave').hidden = true;
+  $('sAlso').hidden = true; $('sConnect').hidden = true;
+}
+function showSearchCard(r, badge, note, canSave) {
+  const gender = genderOf(r[POS]);
+  $('sCard').dataset.pos = posClass(r[POS]);
+  $('sResult').innerHTML = `
+    <span class="badge ${badge.kind}" id="sBadge">${esc(badge.label)}</span>
+    <div class="rc-head">
+      <span class="sv" lang="sv">${esc(r[W])}</span>
+      <button class="link" type="button" data-say="${esc(r[W])}" aria-label="Listen">${ICON_SPEAKER} Listen</button>
+    </div>
+    <div class="meta">${gender ? `<span class="gender" data-g="${gender}">${gender}</span> ` : ''}${r[POS] ? `<span class="pos">${esc(r[POS])}</span>` : ''}</div>
+    ${note ? `<p class="rc-note">${esc(note)}</p>` : ''}
+    ${entryBodyHtml(r)}`;
+  $('sSave').hidden = !canSave;
+  $('sCard').hidden = false;
+}
+// Other saved words that loosely match (substring / English / stem), as
+// quick links — the best match itself is shown in full, so it's excluded.
+function renderAlso(rows, q, best) {
+  const n = q.toLowerCase(), st = stemWord(n);
+  const others = rows.filter(r => r !== best && clientMatches(r, n, st)).slice(0, 5);
+  $('sAlso').hidden = !others.length;
+  $('sAlso').innerHTML = others.length
+    ? 'Also in ' + whereLabel() + ':' + others.map(r => ` <button class="link" type="button" data-lookup="${esc(r[W])}" lang="sv">${esc(r[W])}</button>`).join(',')
+    : '';
+}
+async function lookupWord(word) {
+  if (word != null) $('sq').value = word;
+  const q = $('sq').value.trim();
+  if (!q) { setSMsg('Type a Swedish word first.', 'err'); $('sq').focus(); return; }
+  const seq = ++lookupSeq;
+  pendingRow = null;
+  hideSearchResult();
+  $('searchView').classList.remove('idle');
+  const btn = $('sGo'); btn.disabled = true;
+  setSMsg('Searching ' + whereLabel() + '…');
+  try {
+    const rows = await fetchAllRows(false);
+    if (seq !== lookupSeq) return;
+    const hit = findExistingRow(rows, q);
+    renderAlso(rows, q, hit);
+    if (hit) {
+      const note = hit[W].toLowerCase() !== q.toLowerCase() ? 'You searched “' + q + '” — saved as “' + hit[W] + '”.' : '';
+      showSearchCard(hit, { kind: 'ok', label: 'In ' + whereLabel() }, note, false);
+      setSMsg('');
+      return;
+    }
+    if (!apiUrl) {
+      setSMsg('“' + q + '” isn’t in your words. Connect your Google Sheet to look it up with AI.');
+      $('sConnect').hidden = false;
+      return;
+    }
+    setSMsg('Not in your sheet — looking it up with AI…');
+    const data = await post({ action: 'autofill', word: q, sourceSentence: '' });
+    if (seq !== lookupSeq) return;
+    const f = data.fields || {};
+    // Same lemma handling as autofill(): save under the dictionary form and
+    // remember what was typed as a Seen As entry, so search still finds it.
+    const lemma = (f['Dictionary Form'] || '').trim() || q;
+    const isForm = lemma.toLowerCase() !== q.toLowerCase();
+    if (isForm) {
+      const saved = findExistingRow(rows, lemma);
+      if (saved) {
+        showSearchCard(saved, { kind: 'ok', label: 'In your sheet' }, '“' + q + '” is a form of “' + saved[W] + '”.', false);
+        setSMsg('');
+        return;
+      }
+    }
+    const row = {};
+    FORM_COLS.forEach(c => row[c] = '');
+    AI_FORM_COLS.forEach(c => row[c] = String(f[c] || '').trim());
+    row[W] = lemma;
+    row[GF] = JSON.stringify(parseForms(f[GF]));
+    if (isForm) row[SEEN] = JSON.stringify([q.toLowerCase()]);
+    pendingRow = row;
+    showSearchCard(row, { kind: 'new', label: 'Not in your sheet · AI suggestion' },
+      isForm ? 'You searched “' + q + '” — this is its dictionary form.' : '', true);
+    setSMsg('');
+  } catch (e) {
+    if (seq === lookupSeq) setSMsg('Could not look it up: ' + e.message, 'err');
+  } finally {
+    if (seq === lookupSeq) btn.disabled = false;
+  }
+}
+async function saveSearchResult() {
+  if (!pendingRow) return;
+  const btn = $('sSave'); btn.disabled = true; setSMsg('Saving…');
+  try {
+    await apiSave(Object.assign({}, pendingRow));
+    pendingRow = null;
+    btn.hidden = true;
+    const b = $('sBadge'); b.textContent = 'Saved to ' + whereLabel() + ' ✓'; b.className = 'badge ok';
+    setSMsg('');
+  } catch (e) {
+    setSMsg('Could not save: ' + e.message, 'err');
+  } finally { btn.disabled = false; }
+}
+function clearSearch() {
+  lookupSeq++;
+  pendingRow = null;
+  hideSearchResult();
+  setSMsg('');
+  $('sGo').disabled = false;
+  $('sq').value = '';
+  $('searchView').classList.add('idle');
+  $('sq').focus();
+}
+
+/* ================= MY WORDS VIEW ================= */
 let flashWord = null;
 const openSet = new Set();
 let sortMode = store.get('ordbok_sort', 'new');
@@ -790,7 +996,7 @@ async function runSearch(autoOpenSingle) {
         ? 'No word found. Type it in the form and press Auto-fill to add “' + esc(q) + '”.'
         : filterMode === 'todo' ? 'Nothing left to learn. Nice work.'
         : filterMode === 'done' ? 'No learned words yet. Mark words as learned from the list or in Practice.'
-        : 'Your list is empty. Add your first word on the left.') + '</div>';
+        : 'Your list is empty. Search for a word on the Search page, or add one with the form here.') + '</div>';
       return;
     }
     box.innerHTML = '<div class="list">' + rows.map(r => { const gender = genderOf(r[POS]); return `
@@ -801,12 +1007,7 @@ async function runSearch(autoOpenSingle) {
           <span class="meta">${isLearned(r) ? '<span class="tick" title="Learned" aria-label="Learned">✓</span>' : ''}${gender ? `<span class="gender" data-g="${gender}">${gender}</span>` : ''}${r[POS] ? `<span class="pos">${esc(r[POS])}</span>` : ''}</span>
         </summary>
         <div class="detail">
-          ${r[PR] ? `<div class="ipa">${esc(r[PR])}</div>` : ''}
-          <p class="en">${esc(r[EN])}</p>
-          ${(r[XS] || r[XE]) ? `<p class="ex"><span class="s" lang="sv">${esc(r[XS])}</span><br><span class="e">${esc(r[XE])}</span></p>` : ''}
-          ${formsTableHtml(parseForms(r[GF])) ? `<div class="forms"><h3>Forms</h3>${formsTableHtml(parseForms(r[GF]))}</div>` : ''}
-          ${parseSeenAs(r[SEEN]).length ? `<p class="seen">Seen as: ${esc(parseSeenAs(r[SEEN]).join(', '))}</p>` : ''}
-          ${parseTags(r[TAGS]).length ? `<div class="tags">${parseTags(r[TAGS]).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}
+          ${entryBodyHtml(r)}
           <div class="tools">
             <button class="link" data-say="${esc(r[W])}">${ICON_SPEAKER} Listen</button>
             <button class="link" data-learn="${esc(r[W])}" data-val="${isLearned(r) ? '0' : '1'}">${isLearned(r) ? ICON_UNDO + ' Mark as not learned' : ICON_CHECK + ' Mark as learned'}</button>
@@ -1133,13 +1334,10 @@ async function startReading(force) {
   } catch (e) { renderReadingError(e.message); }
 }
 
-// Opens a tapped word's entry on the Words tab, reusing the exact
-// flashWord/openSet highlight mechanism save() and autofill() already use.
+// Opens a tapped word as a single card on the Search page.
 function jumpToWord(word) {
-  flashWord = word.toLowerCase();
-  openSet.add(flashWord);
-  $('q').value = word;
-  setView('words');
+  setView('search');
+  lookupWord(word);
 }
 
 /* ================= PRACTICE VIEW ================= */
@@ -1185,6 +1383,7 @@ async function startPractice(deckOverride) {
     let deck = deckOverride;
     if (!deck) {
       const rows = await apiSearch('');
+      updateTagFilterOptions(rows);   // My words may never have run (app now opens on Search)
       const today = todayStr();
       deck = P.mode === 'todo' ? rows.filter(r => reviewState(r).due <= today) : rows.slice();
     }
@@ -1212,7 +1411,7 @@ function renderCard() {
       ? 'No words are ready for this drill yet — add example sentences, forms, or a gender, or try Flashcards instead.'
       : P.mode === 'todo'
       ? 'Nothing due today. Add more words, switch the deck to All words, or come back later.'
-      : 'No words yet. Add some on the Words tab.') + '</div>';
+      : 'No words yet. Search for a word to add it.') + '</div>';
     return;
   }
   if (!active) {
@@ -1282,33 +1481,41 @@ async function answer(knew) {
 }
 
 /* ================= VIEW SWITCHING ================= */
+const VIEWS = ['search', 'words', 'practice', 'reading'];
 function setView(v) {
-  const practice = v === 'practice', reading = v === 'reading';
-  $('wordsView').hidden = v !== 'words';
-  $('practiceView').hidden = !practice;
-  $('readingView').hidden = !reading;
-  $('tabWords').setAttribute('aria-selected', String(v === 'words'));
-  $('tabPractice').setAttribute('aria-selected', String(practice));
-  $('tabReading').setAttribute('aria-selected', String(reading));
+  VIEWS.forEach(x => $(x + 'View').hidden = x !== v);
+  document.querySelectorAll('#menu nav [data-view]').forEach(b => {
+    if (b.dataset.view === v) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
+  $('menu').open = false;
   $('addFab').hidden = v !== 'words';
-  if (practice) startPractice();
-  else if (reading) startReading();
-  else runSearch();
+  if (v === 'practice') startPractice();
+  else if (v === 'reading') startReading();
+  else if (v === 'words') runSearch();
 }
-// Re-runs whichever view is currently visible, without touching which tab is
-// selected — used after a setting change (e.g. connecting a Google Sheet)
-// made from a non-Words tab, so that tab reflects the new apiUrl right away
-// instead of staying stuck on its stale (e.g. "connect a sheet") state.
+// Re-runs whichever view is currently visible, without changing which page
+// is shown — used after a setting change (e.g. connecting a Google Sheet),
+// so the page reflects the new apiUrl right away instead of staying stuck
+// on its stale (e.g. "connect a sheet") state.
 function refreshCurrentView() {
   if (!$('practiceView').hidden) startPractice();
   else if (!$('readingView').hidden) startReading();
-  else runSearch();
+  else if (!$('wordsView').hidden) runSearch();
+  else if ($('sq').value.trim()) lookupWord();
 }
 
 /* ================= EVENTS ================= */
-$('tabWords').addEventListener('click', () => setView('words'));
-$('tabPractice').addEventListener('click', () => setView('practice'));
-$('tabReading').addEventListener('click', () => setView('reading'));
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+// Close the menu on an outside click or Escape.
+document.addEventListener('click', e => { if ($('menu').open && !$('menu').contains(e.target)) $('menu').open = false; });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('menu').open) { $('menu').open = false; $('menu').querySelector('summary').focus(); } });
+
+$('sForm').addEventListener('submit', e => { e.preventDefault(); lookupWord(); });
+$('sSave').addEventListener('click', saveSearchResult);
+$('sClear').addEventListener('click', clearSearch);
+$('sConnect').addEventListener('click', () => $('settingsMenuBtn').click());
+$('sAlso').addEventListener('click', e => { const b = e.target.closest('[data-lookup]'); if (b) lookupWord(b.dataset.lookup); });
+$('sResult').addEventListener('click', e => { const b = e.target.closest('[data-say]'); if (b) speak(b.dataset.say); });
 
 $('fillBtn').addEventListener('click', () => autofill());
 $('manualBtn').addEventListener('click', () => { currentForms = []; currentSeenAs = []; editingWord = null; renderFormsPreview(); showFields(true); setMsg(''); $('f_pron').focus(); });
@@ -1320,11 +1527,11 @@ $('f_word').addEventListener('keydown', e => {
 $('fields').addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); save(); }
 });
-document.querySelector('.chars').addEventListener('click', e => {
+document.querySelectorAll('.chars').forEach(box => box.addEventListener('click', e => {
   const c = e.target.dataset.c; if (!c) return;
-  const el = $('f_word'); const s = el.selectionStart ?? el.value.length, en = el.selectionEnd ?? s;
+  const el = $(box.dataset.target); const s = el.selectionStart ?? el.value.length, en = el.selectionEnd ?? s;
   el.value = el.value.slice(0, s) + c + el.value.slice(en); el.focus(); el.setSelectionRange(s + 1, s + 1);
-});
+}));
 
 let t; $('q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => runSearch(true), 80); });
 $('sort').value = sortMode;
@@ -1420,13 +1627,14 @@ document.addEventListener('keydown', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key !== '/' || $('wordsView').hidden || $('settings').open) return;
+  const box = !$('searchView').hidden ? $('sq') : !$('wordsView').hidden ? $('q') : null;
+  if (e.key !== '/' || !box || $('settings').open) return;
   if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
   e.preventDefault();
-  $('q').focus();
+  box.focus();
 });
 
-$('settingsMenuBtn').addEventListener('click', () => { $('apiUrl').value = apiUrl; $('settings').showModal(); });
+$('settingsMenuBtn').addEventListener('click', () => { $('menu').open = false; $('apiUrl').value = apiUrl; $('settings').showModal(); });
 $('cancelSettings').addEventListener('click', () => $('settings').close());
 $('saveSettings').addEventListener('click', () => {
   apiUrl = $('apiUrl').value.trim(); store.set('ordbok_api_url', apiUrl);
@@ -1439,7 +1647,7 @@ $('openPinFromSettings').addEventListener('click', async () => {
 });
 
 renderModePill();
-runSearch();
+setView('search');
 </script>
 </body>
 </html>
