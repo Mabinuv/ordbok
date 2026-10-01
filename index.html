@@ -315,10 +315,19 @@ applyTheme(store.get('ordbok_theme', ''));
   .rd-passage h2 { font: 600 28px var(--serif); margin: 0 0 4px; }
   .rd-passage p { margin: 0 0 16px; }
   .rd-passage p:last-child { margin-bottom: 0; }
-  /* A real <button> per word (accessibility), reset to still read as plain
-     inline text — same visual language the old span-based version used. */
-  .rd-word { all: unset; display: inline; cursor: pointer; color: var(--lake); text-decoration: underline dotted; text-underline-offset: 3px; border-radius: 3px; }
+  /* A real <button> per word (accessibility, and — unlike the old
+     target-words-only highlighting — EVERY word in the passage is one of
+     these, tappable whether or not it's already in the user's sheet), reset
+     to still read as plain inline text. Only words matched against the
+     user's full saved list (buildKnownWordMap) get the blue "known" look;
+     everything else stays plain until tapped. */
+  .rd-word { all: unset; display: inline; cursor: pointer; border-radius: 3px; }
+  .rd-word-known { color: var(--lake); text-decoration: underline dotted; text-underline-offset: 3px; }
   .rd-word:hover, .rd-word:focus-visible { background: color-mix(in srgb, var(--lake) 14%, transparent); }
+  /* Tapped-word state, independent of known/unknown — set directly on the
+     clicked button (not re-rendered from passage data), cleared when the
+     panel closes or another word is tapped. */
+  .rd-word.selected, .rd-word.selected:hover, .rd-word.selected:focus-visible { background: var(--highlight); color: var(--on-highlight); text-decoration: none; }
   .rd-caption { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
   .rd-loading-note { font: 500 15px var(--sans); color: var(--muted); margin: 0 0 16px; }
   .rd-skeleton-line { height: 18px; border-radius: 4px; margin-bottom: 10px; background: var(--line); }
@@ -1786,7 +1795,7 @@ async function goToReading(id, push) {
     const row = await apiGetPassage(id);
     if (!row) throw new Error('Passage not found');
     R.current = parsePassage(row);
-    renderReadReading(R.current);
+    await renderReadReading(R.current);
   } catch (e) {
     $('readingBody').innerHTML = '<div class="empty">Could not open this passage: ' + esc(e.message) + '</div>' +
       '<button type="button" class="link" data-action="to-library">← All passages</button>';
@@ -1897,7 +1906,7 @@ async function handleGenerate() {
     const passage = await apiGeneratePassage(words, R.setup.level, R.abort.signal);
     R.current = parsePassage(passage);
     R.screen = 'reading';
-    renderReadReading(R.current);
+    await renderReadReading(R.current);
   } catch (e) {
     if (e.name === 'AbortError') { goToSetup(); return; }
     renderReadGenerateError(e.message);
@@ -1906,23 +1915,60 @@ async function handleGenerate() {
   }
 }
 
-// Wraps each target word's exact surface occurrence in paragraph `pIdx` in a
-// tappable button — unlike the old span-based .rd-word, a real <button> per
-// the spec's accessibility requirements (still visually inline via CSS).
-// Punctuation naturally stays outside, since \p{L} only matches letters.
-// Carries the surface/paragraph index too, since openWordPanel needs both to
-// find the source sentence for a not-yet-saved word's AI lookup.
-function highlightParagraph(text, pIdx, passage) {
-  return esc(text).replace(/[\p{L}]+/gu, tok => {
-    const lw = tok.toLowerCase();
-    const t = passage.targets.find(t => t.paragraphIndex === pIdx && t.surface.toLowerCase() === lw);
-    if (!t) return tok;
-    return '<button type="button" class="rd-word" data-action="word" data-lemma="' + esc(t.lemma) +
-      '" data-surface="' + esc(t.surface) + '" data-pidx="' + pIdx + '">' + tok + '</button>';
+// Resurrects the old (pre-rewrite) exact+stem matching across the user's
+// FULL saved list — word/Grammar Forms/Seen As of every row, not just this
+// passage's AI-picked targets — purely to decide which words get the blue
+// "known" look. Click-ability no longer depends on this at all (every word
+// is tappable regardless, see highlightParagraph/openWordPanel below); it
+// only drives the pre-tap visual hint.
+function buildKnownWordMap(rows) {
+  const exact = new Map(), stems = new Map();
+  rows.forEach(r => {
+    [r[W]].concat(parseForms(r[GF]).map(f => f.sv)).concat(parseSeenAs(r[SEEN])).forEach(f => {
+      const lw = (f || '').toLowerCase();
+      if (!lw) return;
+      exact.set(lw, true);
+      const st = stemWord(lw);
+      if (st.length >= 4) stems.set(st, true);
+    });
   });
+  return { exact, stems };
 }
-function renderReadReading(passage) {
-  const html = passage.paragraphs.map((p, i) => '<p>' + highlightParagraph(p, i, passage) + '</p>').join('');
+
+// Wraps EVERY word in paragraph `pIdx` in a tappable button — not just this
+// passage's AI-picked target words, per the original spec ("every word is a
+// tappable button"). `knownMap` (built once per render by buildKnownWordMap)
+// only decides the "already in your sheet" blue styling; tapping any word,
+// known or not, opens the same check/save panel (openWordPanel below).
+// Punctuation naturally stays outside, since \p{L} only matches letters.
+function highlightParagraph(text, pIdx, knownMap) {
+  // Tokenizes the RAW text first, then escapes each piece individually —
+  // NOT esc(text).replace(...) on the already-escaped string. Escaping
+  // first would turn e.g. a literal `"` into the entity text `&quot;`,
+  // whose letters ("quot") then match \p{L}+ as if it were a real word and
+  // get wrapped in their own <button>, breaking the entity (this was always
+  // latent in the old esc-then-match order, just never visible before,
+  // since only target words got wrapped — now every word does).
+  let out = '', last = 0, m;
+  const re = /[\p{L}]+/gu;
+  while ((m = re.exec(text))) {
+    out += esc(text.slice(last, m.index));
+    const tok = m[0];
+    const lw = tok.toLowerCase();
+    const known = knownMap.exact.has(lw) || knownMap.stems.has(stemWord(lw));
+    out += '<button type="button" class="rd-word' + (known ? ' rd-word-known' : '') +
+      '" data-action="word" data-word="' + esc(tok) + '" data-pidx="' + pIdx + '">' + esc(tok) + '</button>';
+    last = re.lastIndex;
+  }
+  out += esc(text.slice(last));
+  return out;
+}
+async function renderReadReading(passage) {
+  // Falls back to no pre-highlighting (every word still tappable) rather
+  // than failing the whole screen if the row fetch errors.
+  let knownMap = { exact: new Map(), stems: new Map() };
+  try { knownMap = buildKnownWordMap(await fetchAllRows(false)); } catch (e) {}
+  const html = passage.paragraphs.map((p, i) => '<p>' + highlightParagraph(p, i, knownMap) + '</p>').join('');
   const quizTeaser = !passage.quiz.length ? '' :
     '<div class="panel rd-quiz-teaser"><div><strong>Finished reading?</strong><p class="rd-lib-sub">' +
     esc(passage.quizResult
@@ -1955,46 +2001,71 @@ function sentenceContaining(paragraph, surface) {
   return (hit || paragraph).trim();
 }
 
+// Resolves `word` (any tapped surface form) to the exact entry in the
+// current passage's RequestedWords if it matches one (exact or stemmed),
+// else null. Used only to keep the library's "N of Y words opened" stat
+// meaningful — every tap still opens the panel regardless of this match —
+// and to normalize which string gets recorded, so tapping two different
+// inflections of the same requested word only ever counts as one "opened".
+function matchedRequestedWord(word) {
+  if (!R.current) return null;
+  const lw = word.toLowerCase(), st = stemWord(lw);
+  return R.current.requestedWords.find(w => {
+    const wlw = w.toLowerCase();
+    return wlw === lw || stemWord(wlw) === st;
+  }) || null;
+}
+
 // Side panel: known word -> entryBodyHtml() + grading (the nextReviewState +
 // apiUpdateReview two-line primitive Practice's answer() itself uses, called
 // directly here since answer() is hardwired to the Practice deck's P state,
 // not an arbitrary row). Not-yet-saved word -> the Search tab's no-dialog
 // pendingRow-style AI lookup (saveWordFromPanel below), grounded with a real
-// source sentence (unlike lookupWord's hardcoded '').
-async function openWordPanel(lemma, surface, pidx) {
+// source sentence (unlike lookupWord's hardcoded ''). `word` is now just the
+// raw tapped surface form — there's no pre-resolved AI lemma for most words
+// since every word is tappable, not only this passage's targets — but
+// findExistingRow's stemming and autofill's own Dictionary Form resolution
+// already handle an inflected form correctly, same as typing one into Search.
+async function openWordPanel(word, pidx, btnEl) {
   const panel = $('rdPanel');
   if (!panel) return;
+  document.querySelectorAll('#readingBody .rd-word.selected').forEach(b => b.classList.remove('selected'));
+  if (btnEl) btnEl.classList.add('selected');
   panel.hidden = false;
   panel.innerHTML = '<p class="empty">Loading…</p>';
 
-  if (R.current && R.current.openedWords.indexOf(lemma) === -1) {
-    R.current.openedWords = R.current.openedWords.concat([lemma]);
+  const requested = matchedRequestedWord(word);
+  if (requested && R.current && R.current.openedWords.indexOf(requested.toLowerCase()) === -1) {
+    R.current.openedWords = R.current.openedWords.concat([requested.toLowerCase()]);
     apiUpdatePassage(R.current.id, { openedWords: R.current.openedWords }).catch(e => { /* non-blocking — just a progress stat */ });
   }
 
   let row = null;
-  try { const rows = await fetchAllRows(false); row = findExistingRow(rows, lemma); } catch (e) { /* fall through to "not in your words" */ }
+  try { const rows = await fetchAllRows(false); row = findExistingRow(rows, word); } catch (e) { /* fall through to "not in your words" */ }
   const closeBtn = '<button type="button" class="rd-panel-close" data-action="close-panel" aria-label="Close word details">✕</button>';
   if (row) {
     panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(row[W]) + '</div>' + posChipHtml(row) + entryBodyHtml(row) +
       '<div class="rd-panel-grade">' +
-      '<button type="button" data-action="grade" data-knew="0" data-lemma="' + esc(lemma) + '">Still learning</button>' +
-      '<button type="button" data-action="grade" data-knew="1" data-lemma="' + esc(lemma) + '">I know it</button>' +
+      '<button type="button" data-action="grade" data-knew="0" data-word="' + esc(word) + '">Still learning</button>' +
+      '<button type="button" data-action="grade" data-knew="1" data-word="' + esc(word) + '">I know it</button>' +
       '</div>';
   } else if (!apiUrl) {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(lemma) + '</div>' +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' +
       '<p class="rd-lib-sub">Not in your words yet. Connect a Google Sheet to look it up and save it — see Settings.</p>';
   } else {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(lemma) + '</div>' +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' +
       '<p class="rd-lib-sub">Not in your words yet.</p>' +
-      '<button type="button" class="primary" data-action="save-word" data-lemma="' + esc(lemma) + '" data-surface="' + esc(surface) + '" data-pidx="' + pidx + '">Save to my words</button>';
+      '<button type="button" class="primary" data-action="save-word" data-word="' + esc(word) + '" data-pidx="' + pidx + '">Save to my words</button>';
   }
 }
-function closePanel() { const panel = $('rdPanel'); if (panel) panel.hidden = true; }
+function closePanel() {
+  const panel = $('rdPanel'); if (panel) panel.hidden = true;
+  document.querySelectorAll('#readingBody .rd-word.selected').forEach(b => b.classList.remove('selected'));
+}
 
-async function gradeWordFromPanel(lemma, knew) {
+async function gradeWordFromPanel(word, knew) {
   let row = null;
-  try { const rows = await fetchAllRows(false); row = findExistingRow(rows, lemma); } catch (e) {}
+  try { const rows = await fetchAllRows(false); row = findExistingRow(rows, word); } catch (e) {}
   if (!row) return;
   const st = nextReviewState(reviewState(row), knew);
   row[RS] = JSON.stringify(st);
@@ -2007,27 +2078,27 @@ async function gradeWordFromPanel(lemma, knew) {
 // (index.html ~1121-1207) — a pendingRow built from the autofill response,
 // saved via apiSave() — but grounded with the passage's own sentence instead
 // of lookupWord's hardcoded empty sourceSentence.
-async function saveWordFromPanel(lemma, surface, pidx) {
+async function saveWordFromPanel(word, pidx) {
   const panel = $('rdPanel');
   const btn = panel && panel.querySelector('[data-action="save-word"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
   try {
     const paragraph = (R.current && R.current.paragraphs[pidx]) || '';
-    const sourceSentence = paragraph ? sentenceContaining(paragraph, surface) : '';
-    const data = await post({ action: 'autofill', word: lemma, sourceSentence });
+    const sourceSentence = paragraph ? sentenceContaining(paragraph, word) : '';
+    const data = await post({ action: 'autofill', word, sourceSentence });
     const f = data.fields || {};
     if (notRecognised(f)) {
       if (btn) { btn.disabled = false; btn.textContent = 'Save to my words'; }
       if (panel) panel.insertAdjacentHTML('beforeend', '<p class="rd-lib-sub">AI didn’t recognise this as Swedish.</p>');
       return;
     }
-    const finalLemma = String(f['Dictionary Form'] || '').trim() || lemma;
+    const finalLemma = String(f['Dictionary Form'] || '').trim() || word;
     const row = {};
     FORM_COLS.forEach(c => row[c] = '');
     AI_FORM_COLS.forEach(c => row[c] = String(f[c] || '').trim());
     row[W] = finalLemma;
     row[GF] = JSON.stringify(parseForms(f[GF]));
-    if (finalLemma.toLowerCase() !== lemma.toLowerCase()) row[SEEN] = JSON.stringify([lemma.toLowerCase()]);
+    if (finalLemma.toLowerCase() !== word.toLowerCase()) row[SEEN] = JSON.stringify([word.toLowerCase()]);
     await apiSave(row);
     refreshDueLine();
     if (btn) btn.outerHTML = '<p class="rd-lib-sub">✓ Saved to my words.</p>';
@@ -2587,10 +2658,10 @@ $('readingBody').addEventListener('click', e => {
   }
   else if (action === 'generate') handleGenerate();
   else if (action === 'cancel-loading') cancelGeneration();
-  else if (action === 'word') openWordPanel(btn.dataset.lemma, btn.dataset.surface, parseInt(btn.dataset.pidx, 10));
+  else if (action === 'word') openWordPanel(btn.dataset.word, parseInt(btn.dataset.pidx, 10), btn);
   else if (action === 'close-panel') closePanel();
-  else if (action === 'grade') gradeWordFromPanel(btn.dataset.lemma, btn.dataset.knew === '1');
-  else if (action === 'save-word') saveWordFromPanel(btn.dataset.lemma, btn.dataset.surface, parseInt(btn.dataset.pidx, 10));
+  else if (action === 'grade') gradeWordFromPanel(btn.dataset.word, btn.dataset.knew === '1');
+  else if (action === 'save-word') saveWordFromPanel(btn.dataset.word, parseInt(btn.dataset.pidx, 10));
   else if (action === 'start-quiz') goToQuiz();
   else if (action === 'back-to-reading') backToReading();
   else if (action === 'quiz-pick') answerQuiz(parseInt(btn.dataset.i, 10));
