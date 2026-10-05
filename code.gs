@@ -115,7 +115,7 @@ function autofill_(word, sourceSentence, savedEntry) {
     'Use the kind of phrasing a native speaker would actually say — prefer common idiomatic expressions over ' +
     'literal-but-unnatural constructions (e.g. say "helt slut" or "jättetrött", not a stiff literal "helt trött", ' +
     'for "very tired"). If in doubt, choose the simpler, more common phrasing an SFI (Swedish for immigrants) course ' +
-    'would teach at A2-B1 level.\n' +
+    'would teach at A2-C1 level.\n' +
     'IMPORTANT: the entry is ALWAYS about the Dictionary Form, never the form that was typed. If the input is ' +
     'inflected (e.g. "tystare"), every other field — pronunciation, part of speech, meaning, example and forms — ' +
     'describes the dictionary form ("tyst" = "quiet", not "quieter").\n' +
@@ -306,7 +306,17 @@ function generatePassage_(words, level) {
   const lvl = String(level || 'A2').trim() || 'A2';
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = callPassageProvider_(key, list, lvl);
+    // callPassageProvider_ can throw (e.g. JSON.parse on a malformed/
+    // truncated model response) rather than returning { ok: false, ... } —
+    // treated the same as a validation failure here, so it still consumes
+    // one retry instead of skipping straight past it on the first attempt.
+    let result;
+    try {
+      result = callPassageProvider_(key, list, lvl);
+    } catch (e) {
+      if (attempt === 1) return { ok: false, error: 'Generated passage failed validation twice: malformed response (' + e + ')' };
+      continue;
+    }
     if (!result.ok) return result;   // hard provider/network error — no point retrying
     const validated = validatePassage_(result.parsed, list);
     if (validated.ok) return { ok: true, data: validated.data };
@@ -776,6 +786,10 @@ function doGet(e) {
           RequestedCount: safeParseArr_(row.RequestedWords).length,
           OpenedCount: safeParseArr_(row.OpenedWords).length,
           QuizResult: row.QuizResult,
+          // Migrated (pre-rewrite) passages have an empty Quiz — they
+          // predate this feature and never had one generated. Surfaced here
+          // so the library can show that plainly instead of looking "New".
+          HasQuiz: safeParseArr_(row.Quiz).length > 0,
         };
       });
       return json_({ ok: true, passages: list });

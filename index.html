@@ -347,6 +347,7 @@ applyTheme(store.get('ordbok_theme', ''));
   .rd-lib-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
   .rd-lib-title { font: 600 20px var(--serif); line-height: 1.25; }
   .rd-lib-meta { color: var(--muted); font-size: 14px; }
+  .chip-muted { color: var(--muted); }
 
   /* Setup screen */
   .rd-setup { max-width: 560px; margin: 16px auto 0; display: flex; flex-direction: column; gap: 16px; }
@@ -771,6 +772,9 @@ function passageListView_(p) {
     RequestedCount: safeJson(p[PREQ], []).length,
     OpenedCount: safeJson(p[POPENED], []).length,
     QuizResult: p[PQUIZRESULT],
+    // Migrated (pre-rewrite) passages have an empty Quiz — mirrors the
+    // server's ?passages=1 mapping, see code.gs.
+    HasQuiz: safeJson(p[PQUIZ], []).length > 0,
   };
 }
 async function apiListPassages(force) {
@@ -1836,10 +1840,13 @@ function renderLibraryGrid() {
   if (!list.length) { grid.innerHTML = '<div class="empty">No passages match this filter.</div>'; return; }
   grid.innerHTML = list.map(p => {
     const score = p.QuizResult ? safeJson(p.QuizResult, null) : null;
-    const chip = score ? ('Quiz ' + score.score + '/' + score.total) : (p.OpenedCount > 0 ? 'In progress' : 'New');
+    // A migrated (pre-rewrite) passage has no quiz at all — say so plainly
+    // rather than showing "New", which would wrongly suggest one is waiting.
+    const chip = !p.HasQuiz ? 'No quiz' : score ? ('Quiz ' + score.score + '/' + score.total) : (p.OpenedCount > 0 ? 'In progress' : 'New');
+    const chipClass = !p.HasQuiz ? 'chip chip-muted' : 'chip';
     return '<button type="button" class="rd-lib-card" data-action="open-passage" data-id="' + esc(p.Id) + '">' +
       '<div class="rd-lib-card-top"><span class="rd-lib-date">' + esc(fmtDate(p.Created)) + (p.Level ? ' · ' + esc(p.Level) : '') + '</span>' +
-      '<span class="chip">' + esc(chip) + '</span></div>' +
+      '<span class="' + chipClass + '">' + esc(chip) + '</span></div>' +
       '<div class="rd-lib-title" lang="sv">' + esc(p.Title || 'Reading passage') + '</div>' +
       '<div class="rd-lib-meta">' + p.OpenedCount + ' of ' + p.RequestedCount + ' words opened' +
       (p.WordCount ? ' · ' + esc(String(p.WordCount)) + ' words' : '') + '</div></button>';
@@ -1969,12 +1976,17 @@ async function renderReadReading(passage) {
   let knownMap = { exact: new Map(), stems: new Map() };
   try { knownMap = buildKnownWordMap(await fetchAllRows(false)); } catch (e) {}
   const html = passage.paragraphs.map((p, i) => '<p>' + highlightParagraph(p, i, knownMap) + '</p>').join('');
-  const quizTeaser = !passage.quiz.length ? '' :
-    '<div class="panel rd-quiz-teaser"><div><strong>Finished reading?</strong><p class="rd-lib-sub">' +
-    esc(passage.quizResult
-      ? 'Last score ' + passage.quizResult.score + '/' + passage.quizResult.total + '. Retake it to lock the words in.'
-      : passage.quiz.length + ' quick questions on the words and the story. Missed words go to Practice.') +
-    '</p></div><button type="button" class="primary" data-action="start-quiz">Take the quiz</button></div>';
+  // A migrated (pre-rewrite) passage never had a quiz generated for it —
+  // say so plainly rather than silently showing nothing here, which used to
+  // look indistinguishable from something being broken.
+  const quizTeaser = passage.quiz.length
+    ? '<div class="panel rd-quiz-teaser"><div><strong>Finished reading?</strong><p class="rd-lib-sub">' +
+      esc(passage.quizResult
+        ? 'Last score ' + passage.quizResult.score + '/' + passage.quizResult.total + '. Retake it to lock the words in.'
+        : passage.quiz.length + ' quick questions on the words and the story. Missed words go to Practice.') +
+      '</p></div><button type="button" class="primary" data-action="start-quiz">Take the quiz</button></div>'
+    : '<div class="panel rd-quiz-teaser"><div><strong>No quiz for this one</strong><p class="rd-lib-sub">' +
+      'This is an older passage from before quizzes were added, so there’s nothing to take here.</p></div></div>';
   $('readingBody').innerHTML =
     '<button type="button" class="link" data-action="to-library">← All passages</button>' +
     '<div class="rd-reading-layout">' +
