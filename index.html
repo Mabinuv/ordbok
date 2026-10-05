@@ -1567,6 +1567,10 @@ function nextReviewState(state, knew) {
 const READING_MIN_WORDS = 4;
 const READING_COUNT_OPTIONS = [4, 6, 8, 10, 12, 15];
 const READING_COUNT_DEFAULT = 10;
+// A1 dropped — matches autofill_'s own A2-C1 phrasing guidance in code.gs,
+// one consistent floor/ceiling for the AI features across the app rather
+// than a different answer depending on which feature you're using.
+const READING_LEVELS = ['A2', 'B1', 'B2', 'C1'];
 const READING_HISTORY_MAX = 20;
 
 // Column-name constants for the new Passages entity (saved AI reading
@@ -1705,7 +1709,9 @@ const R = {
   passages: [],          // light list from apiListPassages()
   libFilter: 'all',       // 'all' | 'open' | 'quizzed'
   current: null,          // full parsed Passage (parsePassage), for reading/quiz/results
-  setup: { count: readingCount(), level: store.get('ordbok_reading_level', '') || 'A2' },
+  // Clamps a legacy 'A1' (or anything else invalid) saved before READING_LEVELS
+  // dropped it, so the pill group always has exactly one pill pressed.
+  setup: { count: readingCount(), level: READING_LEVELS.includes(store.get('ordbok_reading_level', '')) ? store.get('ordbok_reading_level', '') : 'A2' },
   abort: null,            // AbortController for an in-flight apiGeneratePassage call
   quizIndex: 0, quizChoice: null, quizCorrect: 0, quizMissedLemmas: [],   // in-progress quiz state
 };
@@ -1856,7 +1862,7 @@ function renderLibraryGrid() {
 function renderReadSetup() {
   const countOpts = READING_COUNT_OPTIONS.map(n =>
     '<option value="' + n + '"' + (n === R.setup.count ? ' selected' : '') + '>' + n + '</option>').join('');
-  const levels = ['A1', 'A2', 'B1', 'B2'];
+  const levels = READING_LEVELS;
   $('readingBody').innerHTML =
     '<button type="button" class="link" data-action="to-library">← All passages</button>' +
     '<div class="panel rd-setup">' +

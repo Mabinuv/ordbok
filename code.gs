@@ -92,6 +92,18 @@ const PASSAGE_MAX_TOKENS = 2200;
 const PASSAGE_WORD_COUNT = { min: 120, max: 220 };
 const PASSAGE_QUIZ_COUNT = { min: 4, max: 6 };
 
+// Per-level story-quality guidance for callPassageProvider_ below. The old
+// prompt used one hardcoded "short sentences, everyday topics, present or
+// simple past tense" clause for every level — fine for A2, wrong for C1.
+// Keys match index.html's READING_LEVELS exactly (A1 dropped: this app's
+// AI features target A2-C1, same floor/ceiling as autofill_'s own prompt).
+const LEVEL_GUIDANCE = {
+  'A2': 'Keep sentences short and simple — mostly one clause, or two joined with "och"/"men"/"så". Use only present and simple past tense. Stick to concrete, everyday topics and vocabulary (home, family, daily routines, shopping, weather). Avoid idioms and subordinate clauses.',
+  'B1': 'Mix simple and moderately complex sentences, including common subordinate clauses ("eftersom", "när", "om", "att"-clauses). Present, past, and simple future tense are all fine. Everyday topics plus some broader ones (work, travel, opinions, plans) are fine, and a few common idiomatic expressions are welcome.',
+  'B2': 'Use naturally varied sentence structures, including subordinate and relative clauses, and a range of tenses (including perfect/pluperfect) where natural. Topics can be more abstract or opinion-based (society, feelings, hypothetical situations). Favor natural idiomatic Swedish over stiff literal phrasing.',
+  'C1': 'Write with sophisticated, idiomatic Swedish: varied and sometimes complex sentence structures, a wide range of tenses/moods, and nuanced vocabulary and register. Topics can be abstract, reflective, or nuanced. This should read like something written for a fluent-but-still-learning adult, not a simplified textbook drill — but stay clear and well-formed, not deliberately obscure.',
+};
+
 // How long a search result set is cached (seconds). Search re-reads the whole
 // sheet otherwise, and a Sheets API read is the slowest part of a search by
 // far, so this is the main lever for making search feel instant. Any
@@ -327,14 +339,24 @@ function generatePassage_(words, level) {
 // The actual provider round trip for generatePassage_ — split out so the
 // retry loop above doesn't duplicate the OpenAI/Gemini branching.
 function callPassageProvider_(key, list, level) {
+  const levelGuidance = LEVEL_GUIDANCE[level] || LEVEL_GUIDANCE['A2'];
   const system =
     'You are a Swedish language tutor writing a short graded-reader story for an English-speaking adult learner at ' +
-    level + ' level. Write ONE passage in Swedish, ' + PASSAGE_WORD_COUNT.min + '-' + PASSAGE_WORD_COUNT.max +
+    level + ' level.\n' +
+    'Write it as a genuine short story, not a string of disconnected example sentences: give it a consistent ' +
+    'setting and one or two characters (or a single first-person narrator), and a clear, logical beginning-middle-' +
+    'end arc that fits its length. Connect sentences with natural transitions (e.g. "sedan", "men", "därför", ' +
+    '"efteråt", "till slut") and pronoun back-reference rather than repeating full nouns — it should read as one ' +
+    'small, enjoyable story, not a vocabulary drill.\n' +
+    'Write ONE passage in Swedish, ' + PASSAGE_WORD_COUNT.min + '-' + PASSAGE_WORD_COUNT.max +
     ' words long, across 2-4 paragraphs, that naturally uses as many as possible of a given list of Swedish words. ' +
     'You may inflect/conjugate a given word as needed to fit the sentence (natural grammar always wins over using ' +
-    'a word\'s exact dictionary/lemma form) — it is fine to skip a word if it cannot be worked in naturally. Keep ' +
-    'everything outside the target words at or below ' + level + ' level (short sentences, everyday topics, present ' +
-    'or simple past tense) — the point is comfortable reading practice, not a challenge.\n' +
+    'a word\'s exact dictionary/lemma form) — it is fine to skip a word if it cannot be worked in naturally. If a ' +
+    'target word naturally fits more than once in the story, prefer a DIFFERENT inflected form each time it ' +
+    'reappears (e.g. "sprang" once and "springer" elsewhere) rather than repeating the exact same form, so the ' +
+    'learner sees more than one form of the word — but still report only its clearest/first occurrence in ' +
+    '"targets" below.\n' +
+    levelGuidance + ' The point is comfortable reading practice at this level, not a challenge above it.\n' +
     'Then write ' + PASSAGE_QUIZ_COUNT.min + '-' + PASSAGE_QUIZ_COUNT.max + ' multiple-choice questions about the ' +
     'passage: a mix of word-meaning questions and at least one question testing overall understanding of the story. ' +
     'Each question has exactly 4 short answer options with exactly one correct answer.\n' +
