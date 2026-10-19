@@ -34,6 +34,7 @@ Run `node .claude/skills/ship/check.mjs`. It checks:
 - that `STEM_SUFFIXES` matches between the two files
 - that there are no secrets and no conflict markers
 - that external resources come from allowed hosts
+- that the PWA files (manifest, icons, service worker) exist and are allowed by `.vercelignore`
 
 Any `FAIL`: stop and show its output verbatim. `WARN`: mention it and continue.
 
@@ -70,7 +71,7 @@ Then wait for the user's go-ahead. If they edit the message or file list, use th
 
 ## 6. Deploy
 
-- `vercel deploy --prod --yes`. Only `index.html` is uploaded, because `.vercelignore` excludes everything else.
+- `vercel deploy --prod --yes`. Only the app files are uploaded (`index.html`, `manifest.webmanifest`, `sw.js`, `icons/*.png` — `.vercelignore` excludes everything else).
 - Run `vercel ls ordbok` and confirm the newest deployment is **Ready** and **Production**. Take its URL. If it's Error, run `vercel inspect <url> --logs` and report.
 
 ## 7. Verify it's live

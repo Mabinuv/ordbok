@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Ordbok – my Swedish word list</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#f7f5f0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1b23" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MJ Ordbok">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
@@ -76,7 +84,7 @@ applyTheme(store.get('ordbok_theme', ''));
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   html, body { margin: 0; }
-  body { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--sans); padding: 24px 16px calc(64px + var(--tabbar-h)); }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--sans); padding: 24px 16px calc(64px + var(--tabbar-h)); padding-top: max(24px, calc(env(safe-area-inset-top) + 8px)); padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); overscroll-behavior-y: none; -webkit-tap-highlight-color: transparent; }
   .wrap { max-width: 1040px; margin: 0 auto; }
   .sr { position: absolute; left: -9999px; }
   [lang="sv"] { font-family: var(--serif); }
@@ -450,7 +458,7 @@ applyTheme(store.get('ordbok_theme', ''));
   /* ---------- Phones: tabs become a bottom bar ---------- */
   @media (max-width: 720px) {
     :root { --tabbar-h: calc(64px + env(safe-area-inset-bottom)); }
-    body { padding: 16px 16px calc(32px + var(--tabbar-h)); }
+    body { padding: 16px 16px calc(32px + var(--tabbar-h)); padding-top: max(16px, calc(env(safe-area-inset-top) + 8px)); padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
     header { margin-bottom: 16px; }
     h1 { font-size: 28px; }
     .tabs {
@@ -699,6 +707,11 @@ applyTheme(store.get('ordbok_theme', ''));
   <input id="apiUrl" placeholder="https://script.google.com/macros/s/…/exec">
   <p class="sub" id="settingsStatus" hidden></p>
   <button class="link" id="openPinFromSettings" type="button" hidden>Enter shared PIN</button>
+  <div id="installBox" hidden>
+    <h3 style="margin:18px 0 6px;font-size:16px">Install on your phone</h3>
+    <p class="sub" id="installNote"></p>
+    <button class="link" id="installBtn" type="button" hidden>⬇ Install MJ Ordbok</button>
+  </div>
   <h3 style="margin:18px 0 6px;font-size:16px">Voice</h3>
   <label for="setVoice">Swedish voice for every Listen button</label>
   <select id="setVoice"></select>
@@ -3298,6 +3311,38 @@ async function applyCheck() {
   if (!$('wordsView').hidden) runSearch();
 }
 
+/* ================= INSTALL AS AN APP (PWA) ================= */
+// Android/desktop Chrome offer a real install prompt (captured below); iOS has
+// none, so show the Share → Add to Home Screen steps. Hidden once installed.
+let installEvt = null;
+const isStandalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+function setupInstall() {
+  try {
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  } catch (e) { /* the app works fine without a service worker */ }
+  if (isStandalone()) return;
+  const box = $('installBox'), note = $('installNote'), btn = $('installBtn');
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (ios) {
+    note.textContent = 'In Safari, tap the Share button, then “Add to Home Screen”. It opens full-screen, like an app.';
+    box.hidden = false;
+  }
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault(); installEvt = e;
+    note.textContent = 'Add MJ Ordbok to your home screen. It opens full-screen and works offline.';
+    btn.hidden = false; box.hidden = false;
+  });
+  btn.addEventListener('click', async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    try { await installEvt.userChoice; } catch (e) {}
+    installEvt = null; btn.hidden = true; box.hidden = true;
+  });
+  window.addEventListener('appinstalled', () => { box.hidden = true; });
+}
+
 /* ================= EVENTS ================= */
 // Delegated so dynamically rendered links (e.g. the "Practice" link in the
 // due-today line) work too.
@@ -3595,6 +3640,7 @@ outbox = safeJson(store.get(OUTBOX_KEY, ''), []);
 if (!Array.isArray(outbox)) outbox = [];
 hydrateRowsCache();
 loadVoices();
+setupInstall();
 renderModePill();
 renderSyncPill();
 renderThemeBtn();

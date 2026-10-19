@@ -131,6 +131,22 @@ const texts = files.map(f => { try { return [f, read(f)]; } catch { return [f, '
   report(bad.length ? 'WARN' : 'PASS', 'External resources from allowed hosts', bad);
 }
 
+// 10. PWA files: manifest is valid JSON, its icons exist, and the Vercel
+// allowlist (.vercelignore) actually publishes the manifest, service worker and icons.
+{
+  const problems = [];
+  try {
+    const m = JSON.parse(read('manifest.webmanifest'));
+    if (!m.name || !m.short_name || m.display !== 'standalone' || !m.start_url) problems.push('manifest.webmanifest: needs name, short_name, start_url and display "standalone"');
+    for (const ic of m.icons || []) { try { readFileSync(join(root, ic.src.replace(/^\//, ''))); } catch (e) { problems.push('manifest icon missing: ' + ic.src); } }
+  } catch (e) { problems.push('manifest.webmanifest: ' + e.message); }
+  try { readFileSync(join(root, 'sw.js')); } catch (e) { problems.push('sw.js is missing'); }
+  const ignore = read('.vercelignore');
+  for (const f of ['index.html', 'manifest.webmanifest', 'sw.js', 'icons/']) if (!ignore.split('\n').some(l => l.trim() === '!' + f)) problems.push('.vercelignore does not allow ' + f);
+  if (!/rel="manifest"/.test(html)) problems.push('index.html has no <link rel="manifest">');
+  report(problems.length ? 'FAIL' : 'PASS', 'PWA: manifest, icons, service worker published', problems);
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(failed ? `\n${failed} check(s) failed.` : '\nAll checks passed.');
 process.exit(failed ? 1 : 0);

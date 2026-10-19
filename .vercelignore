@@ -2,3 +2,7 @@
 # backend source (code.gs), README and .claude/ off the public site.
 /*
 !index.html
+!manifest.webmanifest
+!sw.js
+!icons/
+!icons/*.png
