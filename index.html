@@ -88,6 +88,9 @@ applyTheme(store.get('ordbok_theme', ''));
   .wrap { max-width: 1040px; margin: 0 auto; }
   .sr { position: absolute; left: -9999px; }
   [lang="sv"] { font-family: var(--serif); }
+  /* Never leave a control's text colour to the browser default: iOS picks it from the
+     phone's dark/light setting, ignoring our own theme switch (white-on-white chips). */
+  button, select, input, textarea { color: inherit; }
   button { font: inherit; cursor: pointer; }
   .link { background: none; border: 0; color: var(--lake); text-decoration: underline; text-underline-offset: 3px; padding: 0; }
   input, select, textarea {
@@ -424,7 +427,7 @@ applyTheme(store.get('ordbok_theme', ''));
   .rd-say:hover, .rd-say:focus-visible { opacity: 1; color: var(--lake); background: color-mix(in srgb, var(--lake) 14%, transparent); }
   .rd-word-new { color: var(--c-adj); text-decoration: underline; text-decoration-style: solid; text-underline-offset: 3px; font-weight: 600; }
   .rd-newwords { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); font: 400 14px var(--sans); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .rd-newchip { cursor: pointer; border: 0; }
+  .rd-newchip { cursor: pointer; border: 0; color: var(--lake); background: var(--sand); }
   .rd-en-btn { all: unset; cursor: pointer; font: 500 13px var(--sans); color: var(--lake); border-radius: 4px; padding: 2px 4px; }
   .rd-en-btn:focus-visible { outline: 2px solid var(--lake); outline-offset: 2px; }
   .rd-en { font: 400 16px/1.55 var(--sans); color: var(--muted); margin: 4px 0 0; padding-left: 12px; border-left: 3px solid var(--line); }
@@ -1376,20 +1379,32 @@ let speechToken = 0, speechCur = null, speechTimer = null;
 function svVoices() {
   try { return (speechSynthesis.getVoices() || []).filter(v => /^sv([-_]|$)/i.test(v.lang)); } catch (e) { return []; }
 }
-const voiceKey = v => v.voiceURI || v.name;
-// The learner's pick (saved by voiceURI), else the best Swedish voice on the
+// One stable, unique key per voice (voiceURI can be empty or repeated on some
+// platforms, which would make a second same-named voice impossible to select).
+function voiceEntries() {
+  const seen = {};
+  return svVoices().map(v => {
+    let key = (v.voiceURI || '') + '|' + v.name + '|' + v.lang;
+    seen[key] = (seen[key] || 0) + 1;
+    if (seen[key] > 1) key += '#' + seen[key];
+    return { v, key };
+  });
+}
+// The learner's pick (saved by key), else the best Swedish voice on the
 // device: Premium > Enhanced/Neural/Natural > on-device > network voices.
-function svVoice() {
-  const all = svVoices();
+function svEntry() {
+  const all = voiceEntries();
   if (!all.length) return null;
   const saved = store.get('ordbok_voice', store.get('ordbok_reading_voice', ''));
-  const pick = saved && all.find(v => voiceKey(v) === saved);
+  // (older saves stored just the voiceURI or the name)
+  const pick = saved && (all.find(e => e.key === saved) || all.find(e => e.v.voiceURI === saved || e.v.name === saved));
   if (pick) return pick;
   // macOS puts the quality in the voice ID (…voice.premium.sv-SE.Alva) even when
   // the display name is just "Alva", so look at both.
-  const rank = v => { const id = v.name + ' ' + (v.voiceURI || ''); return /premium/i.test(id) ? 0 : /enhanced|neural|natural/i.test(id) ? 1 : /compact/i.test(id) || !v.localService ? 3 : 2; };
+  const rank = e => { const v = e.v, id = v.name + ' ' + (v.voiceURI || ''); return /premium/i.test(id) ? 0 : /enhanced|neural|natural/i.test(id) ? 1 : /compact/i.test(id) || !v.localService ? 3 : 2; };
   return all.slice().sort((a, b) => rank(a) - rank(b))[0];
 }
+function svVoice() { const e = svEntry(); return e ? e.v : null; }
 function speechRate() {
   const r = parseFloat(store.get('ordbok_speech_rate', store.get('ordbok_reading_speed', '1')));
   return r > 0 && r <= 1.5 ? r : 1;
@@ -2446,16 +2461,14 @@ function highlightParagraph(text, pIdx, knownMap, sStart, newSet) {
 
 /* ---------- listening: voice pickers + passage playback (engine: speechSay above) ---------- */
 function voiceOptionsHtml() {
-  const cur = svVoice();
-  // Keyed by voiceURI: macOS can list a standard and a Premium voice under the
-  // same name, and a name-only key would always resolve to the first of them.
-  const all = svVoices();
-  const dup = n => all.filter(v => v.name === n).length > 1;
-  return all.map(v => {
-    const key = voiceKey(v);
-    const q = /premium/i.test(key) ? 'Premium' : /enhanced/i.test(key) ? 'Enhanced' : /compact/i.test(key) ? 'Standard' : '';
-    const tail = (q && !new RegExp(q, 'i').test(v.name)) || dup(v.name) ? ' (' + (q || String(key).replace(/^.*[./]/, '')) + ')' : '';
-    return '<option value="' + esc(key) + '"' + (cur && voiceKey(cur) === key ? ' selected' : '') + '>' + esc(v.name + tail) + '</option>';
+  const cur = svEntry();
+  const all = voiceEntries();
+  const dupName = n => all.filter(e => e.v.name === n).length > 1;
+  return all.map((e, i) => {
+    const v = e.v, id = v.name + ' ' + (v.voiceURI || '');
+    const q = /premium/i.test(id) ? 'Premium' : /enhanced/i.test(id) ? 'Enhanced' : /compact/i.test(id) ? 'Standard' : '';
+    const tail = q && !new RegExp(q, 'i').test(v.name) ? ' (' + q + ')' : (dupName(v.name) && !q ? ' (' + (i + 1) + ')' : '');
+    return '<option value="' + esc(e.key) + '"' + (cur && cur.key === e.key ? ' selected' : '') + '>' + esc(v.name + tail) + '</option>';
   }).join('');
 }
 // Fills every voice <select> (listen bar + Settings) and the "who is reading" captions.
@@ -2470,8 +2483,11 @@ function fillVoiceSelects() {
   const name = cur ? cur.name + (cur.localService === false ? ' (online)' : '') : 'the browser’s default voice';
   const n1 = $('rdVoiceName'); if (n1) n1.textContent = 'Reading: ' + name;
   const n2 = $('setVoiceNote');
+  const found = svVoices();
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   if (n2) n2.textContent = !SPEECH_OK ? 'This browser has no speech support.'
-    : cur ? 'Reading now: ' + name + '. Applies to every Listen button.'
+    : cur ? 'Reading now: ' + name + '. Applies to every Listen button. Swedish voices this device shares with the app: ' + found.length + (found.length ? ' (' + found.map(v => v.name).join(', ') + ')' : '') + '.' +
+      (ios && found.length <= 1 ? ' iPhones only share their standard Swedish voice with web apps, so there is nothing else to pick here; a downloaded Premium voice works in Safari on a Mac.' : '')
     : 'No Swedish voice found yet. On a Mac: System Settings → Accessibility → Spoken Content → System Voice → Manage Voices, download a Swedish voice (Premium sounds best), then reopen the browser. Safari can use Premium voices; Chrome often can’t.';
 }
 // Voices load asynchronously and Safari doesn't always fire `voiceschanged`,
