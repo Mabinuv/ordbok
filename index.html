@@ -396,6 +396,46 @@ applyTheme(store.get('ordbok_theme', ''));
   .rd-quiz-missed { width: 100%; text-align: left; background: var(--sand); box-shadow: none; }
   .rd-quiz-missed-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
   .rd-quiz-missed-row:first-of-type { border-top: 0; margin-top: 8px; }
+  /* themed passages, listening, translation, writing */
+  .rd-setup-label { display: block; font: 600 14px var(--sans); margin: 0 0 8px; }
+  .rd-setup input[type="text"] { width: 100%; }
+  .rd-chips button { min-height: 36px; padding: 0 12px; font-size: 14px; }
+  .rd-lib-theme { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+  .rd-lib-theme select { width: auto; padding: 6px 10px; font-size: 14px; }
+  .rd-lib-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rd-listenbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 18px; font: 400 14px var(--sans); }
+  .rd-listenbar button { min-height: 40px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 600; cursor: pointer; }
+  .rd-listenbar button.primary { border-color: var(--lake); }
+  .rd-listenbar select { width: auto; padding: 6px 10px; font-size: 14px; margin-left: 4px; }
+  .rd-listen-first { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  .rd-para { margin: 0 0 16px; }
+  .rd-para p { margin: 0 0 6px; }
+  .rd-sent.playing { background: var(--highlight); color: var(--on-highlight); border-radius: 4px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .rd-sent.playing .rd-word-known { color: inherit; }
+  .rd-say { all: unset; cursor: pointer; font: 600 11px var(--sans); color: var(--muted); border-radius: 999px; padding: 2px 5px; margin-right: 3px; vertical-align: 2px; opacity: .55; }
+  .rd-say:hover, .rd-say:focus-visible { opacity: 1; color: var(--lake); background: color-mix(in srgb, var(--lake) 14%, transparent); }
+  .rd-word-new { color: var(--c-adj); text-decoration: underline; text-decoration-style: solid; text-underline-offset: 3px; font-weight: 600; }
+  .rd-newwords { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); font: 400 14px var(--sans); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .rd-newchip { cursor: pointer; border: 0; }
+  .rd-en-btn { all: unset; cursor: pointer; font: 500 13px var(--sans); color: var(--lake); border-radius: 4px; padding: 2px 4px; }
+  .rd-en-btn:focus-visible { outline: 2px solid var(--lake); outline-offset: 2px; }
+  .rd-en { font: 400 16px/1.55 var(--sans); color: var(--muted); margin: 4px 0 0; padding-left: 12px; border-left: 3px solid var(--line); }
+  .rd-text-hidden { filter: blur(7px); user-select: none; pointer-events: none; }
+  .rd-hide-note { background: var(--sand); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 14px; font: 400 14px var(--sans); }
+  .rd-panel-listen { margin: -4px 0 8px; }
+  .rd-quiz-expl { font-weight: 400; margin-top: 6px; }
+  .rd-quiz-listen { display: flex; gap: 8px; flex-wrap: wrap; }
+  .rd-quiz-listen button { min-height: 44px; padding: 0 16px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); color: var(--ink); font-weight: 600; cursor: pointer; }
+  .rd-quiz-listen button.primary { border-color: var(--lake); }
+  .rd-write-cta { width: 100%; text-align: left; background: var(--sand); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .rd-write { max-width: 640px; margin: 16px auto 0; display: flex; flex-direction: column; gap: 18px; border-radius: var(--radius-lg); }
+  .rd-write h2 { font: 600 24px var(--serif); margin: 0; }
+  .rd-write-item { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .rd-write-item textarea { width: 100%; }
+  .rd-write-q { font: 500 18px var(--serif); }
+  .rd-write-a { background: var(--sand); border-radius: var(--radius); padding: 8px 12px; align-self: stretch; }
+  .rd-write-fix { font: 400 16px var(--serif); }
+  .rd-write-issues { margin: 0; padding-left: 18px; font: 400 14px var(--sans); color: var(--muted); }
 
   /* ---------- Dialogs ---------- */
   dialog { border: 0; border-radius: var(--radius); background: var(--card); color: var(--ink); box-shadow: var(--shadow); max-width: 520px; width: calc(100% - 32px); padding: 24px; }
@@ -869,6 +909,8 @@ function passageListView_(p) {
     RequestedCount: safeJson(p[PREQ], []).length,
     OpenedCount: safeJson(p[POPENED], []).length,
     QuizResult: p[PQUIZRESULT],
+    Theme: p[PTHEME] || '',
+    Written: !!p[PWRESULT],
     // Migrated (pre-rewrite) passages have an empty Quiz — mirrors the
     // server's ?passages=1 mapping, see code.gs.
     HasQuiz: safeJson(p[PQUIZ], []).length > 0,
@@ -903,11 +945,19 @@ async function apiGetPassage(id) {
 // No demo-mode fallback: Demo mode has no AI auto-fill (see apiSave et al.
 // elsewhere) and likewise no passage generation — the Read library's empty
 // state points at Settings instead of calling this.
-async function apiGeneratePassage(words, level, signal) {
+async function apiGeneratePassage(words, level, signal, opts) {
   if (!apiUrl) throw new Error('Connect a Google Sheet to generate reading passages.');
-  const data = await post({ action: 'generatePassage', words, level }, false, signal);
+  const o = opts || {};
+  const data = await post({ action: 'generatePassage', words, level, theme: o.theme || '', length: o.length || 'medium', count: o.count || words.length }, false, signal);
   invalidatePassagesCache();
   return data.passage;
+}
+// Marks the learner's written answers (see checkWriting_ in code.gs).
+async function apiCheckWriting(answers, level) {
+  if (!apiUrl) throw new Error('Connect a Google Sheet to get feedback on your writing.');
+  const data = await post({ action: 'checkWriting', answers, level });
+  if (!Array.isArray(data.results)) throw new Error('This Google Sheet’s script needs updating to the latest code.gs to check writing.');
+  return data.results;
 }
 // patch: { openedWords?, quizResult?, status? } — same targeted-patch shape
 // either mode uses; never touches paragraphs/targets/quiz themselves.
@@ -923,6 +973,7 @@ function demoUpdatePassage_(id, patch) {
   if (patch.openedWords !== undefined) row[POPENED] = JSON.stringify(patch.openedWords);
   if (patch.quizResult !== undefined) row[PQUIZRESULT] = patch.quizResult ? JSON.stringify(patch.quizResult) : '';
   if (patch.status !== undefined) row[PSTATUS] = patch.status;
+  if (patch.writingResult !== undefined) row[PWRESULT] = patch.writingResult ? JSON.stringify(patch.writingResult) : '';
   store.set(DEMO_PASSAGES_KEY, JSON.stringify(demo));
 }
 
@@ -1822,6 +1873,10 @@ const READING_COUNT_DEFAULT = 10;
 // than a different answer depending on which feature you're using.
 const READING_LEVELS = ['A2', 'B1', 'B2', 'C1'];
 const READING_HISTORY_MAX = 20;
+// Story length is its own choice (independent of how many words are used);
+// the word counts are approximate targets mirrored in code.gs PASSAGE_LENGTHS.
+const READING_LENGTHS = [['short', 'Short', '~110 words'], ['medium', 'Medium', '~180 words'], ['long', 'Long', '~265 words']];
+const READING_THEMES = ['Bostad', 'Mat', 'Resor', 'Arbete', 'Hälsa', 'Skola', 'Familj', 'Fritid'];
 
 // Column-name constants for the new Passages entity (saved AI reading
 // passages with target words + a quiz) — mirrors the FORM_COLS/W,PR,POS,...
@@ -1829,8 +1884,10 @@ const READING_HISTORY_MAX = 20;
 // always keyed by these header-name strings, both server-side (Connected
 // mode) and in the Demo-mode local fallback below.
 const PASSAGE_COLS = ['Id', 'Created', 'Status', 'Title', 'Level', 'WordCount', 'Paragraphs',
-  'Targets', 'Quiz', 'RequestedWords', 'OpenedWords', 'QuizResult', 'Source'];
-const [PID, PCREATED, PSTATUS, PTITLE, PLEVEL, PWORDCOUNT, PPARAS, PTARGETS, PQUIZ, PREQ, POPENED, PQUIZRESULT, PSOURCE] = PASSAGE_COLS;
+  'Targets', 'Quiz', 'RequestedWords', 'OpenedWords', 'QuizResult', 'Source',
+  'Theme', 'Translations', 'Writing', 'WritingResult'];
+const [PID, PCREATED, PSTATUS, PTITLE, PLEVEL, PWORDCOUNT, PPARAS, PTARGETS, PQUIZ, PREQ, POPENED, PQUIZRESULT, PSOURCE,
+  PTHEME, PTRANS, PWRITE, PWRESULT] = PASSAGE_COLS;
 
 function readingCount() {
   const n = parseInt(store.get('ordbok_reading_count', ''), 10);
@@ -1961,9 +2018,22 @@ const R = {
   current: null,          // full parsed Passage (parsePassage), for reading/quiz/results
   // Clamps a legacy 'A1' (or anything else invalid) saved before READING_LEVELS
   // dropped it, so the pill group always has exactly one pill pressed.
-  setup: { count: readingCount(), level: READING_LEVELS.includes(store.get('ordbok_reading_level', '')) ? store.get('ordbok_reading_level', '') : 'A2' },
+  setup: {
+    count: readingCount(),
+    level: READING_LEVELS.includes(store.get('ordbok_reading_level', '')) ? store.get('ordbok_reading_level', '') : 'A2',
+    theme: store.get('ordbok_reading_theme', '').slice(0, 60),
+    length: READING_LENGTHS.some(l => l[0] === store.get('ordbok_reading_length', '')) ? store.get('ordbok_reading_length', '') : 'medium',
+  },
   abort: null,            // AbortController for an in-flight apiGeneratePassage call
-  quizIndex: 0, quizChoice: null, quizCorrect: 0, quizMissedLemmas: [],   // in-progress quiz state
+  quizItems: [], quizIndex: 0, quizChoice: null, quizCorrect: 0, quizMissedLemmas: [], quizMissedIdx: [], quizRetake: false,   // in-progress quiz state (quizItems = indices into current.quiz)
+  libTheme: '',           // library theme filter ('' = all)
+  writeEditing: false,
+  notice: '',             // one-time note shown above the next reading screen
+  showEn: {},             // paragraph index -> English translation visible
+  hideText: false,        // "listen first": passage text blurred until revealed
+  sentences: [],          // flat sentence list of the open passage (for read-aloud)
+  listenIdx: -1, listenToken: 0, listening: false,
+  writeDraft: [], writeBusy: false, writeError: '',
 };
 
 // Converts one raw sheet-shaped passage row (JSON-string fields, see
@@ -1980,6 +2050,10 @@ function parsePassage(row) {
     openedWords: safeJson(row[POPENED], []),
     quizResult: row[PQUIZRESULT] ? safeJson(row[PQUIZRESULT], null) : null,
     source: row[PSOURCE],
+    theme: row[PTHEME] || '',
+    translations: safeJson(row[PTRANS], []),
+    writing: safeJson(row[PWRITE], []),
+    writingResult: row[PWRESULT] ? safeJson(row[PWRESULT], null) : null,
   };
 }
 function fmtDate(iso) {
@@ -2005,21 +2079,18 @@ window.addEventListener('popstate', () => {
 // without re-fetching when it already matches the hash's id (e.g. switching
 // tabs away and back), so this is cheap except on an actual deep-link/refresh.
 function syncReadScreenFromHash() {
-  const parts = location.hash.slice(1).split('/');   // 'read' -> ['read']; 'read/new' -> ['read','new']; 'read/<id>[/quiz]'
+  const parts = location.hash.slice(1).split('/');   // 'read' -> ['read']; 'read/new' -> ['read','new']; 'read/<id>[/quiz|/write]'
   if (parts.length <= 1) { goToLibrary(false); return; }
   if (parts[1] === 'new') { goToSetup(false); return; }
   const id = decodeURIComponent(parts[1]);
-  const wantQuiz = parts[2] === 'quiz';
-  if (R.current && R.current.id === id) {
-    if (wantQuiz && R.current.quiz.length) { R.screen = 'quiz'; R.quizIndex = 0; R.quizChoice = null; renderReadQuiz(); }
+  const want = parts[2] === 'quiz' ? 'quiz' : parts[2] === 'write' ? 'write' : '';
+  const go = () => {
+    if (want === 'quiz' && R.current && R.current.quiz.length) goToQuiz(false);
+    else if (want === 'write' && R.current && R.current.writing.length) goToWrite(false);
     else { R.screen = 'reading'; renderReadReading(R.current); }
-    return;
-  }
-  goToReading(id, false).then(() => {
-    if (wantQuiz && R.current && R.current.id === id && R.current.quiz.length) {
-      R.screen = 'quiz'; R.quizIndex = 0; R.quizChoice = null; renderReadQuiz();
-    }
-  });
+  };
+  if (R.current && R.current.id === id) { go(); return; }
+  goToReading(id, false).then(() => { if (want && R.current && R.current.id === id) go(); });
 }
 
 // Called from setView('reading') — only ever re-renders a screen, never
@@ -2031,6 +2102,9 @@ function enterReadTab() {
   if (R.screen === 'reading' && R.current) { pushReadState('#read/' + encodeURIComponent(R.current.id)); renderReadReading(R.current); }
   else if (R.screen === 'quiz' && R.current && R.current.quiz.length) {
     pushReadState('#read/' + encodeURIComponent(R.current.id) + '/quiz'); renderReadQuiz();
+  }
+  else if (R.screen === 'write' && R.current && R.current.writing.length) {
+    pushReadState('#read/' + encodeURIComponent(R.current.id) + '/write'); renderReadWrite();
   }
   else if (R.screen === 'results' && R.current) backToReading();   // mid-results on tab-away/back: just resume reading
   else if (R.screen === 'setup' && apiUrl) goToSetup();
@@ -2071,7 +2145,7 @@ async function renderReadLibrary() {
     [['all', 'All'], ['open', 'Not quizzed'], ['quizzed', 'Quizzed']].map(([f, label]) =>
       '<button type="button" data-action="lib-filter" data-filter="' + f + '" aria-pressed="' + (R.libFilter === f) + '">' + label + '</button>'
     ).join('') +
-    '</div><div id="rdLibGrid" class="rd-lib-grid"><p class="empty">Loading your passages…</p></div>';
+    '</div><div id="rdLibTheme"></div><div id="rdLibGrid" class="rd-lib-grid"><p class="empty">Loading your passages…</p></div>';
   try {
     R.passages = await apiListPassages(false);
   } catch (e) {
@@ -2081,6 +2155,7 @@ async function renderReadLibrary() {
   renderLibraryGrid();
 }
 function renderLibraryGrid() {
+  stopListening();
   const grid = $('rdLibGrid'); if (!grid) return;
   // Defensive: R.passages should always be an array by the time this runs
   // (apiListPassages validates its response shape), but a render function
@@ -2090,7 +2165,16 @@ function renderLibraryGrid() {
     grid.innerHTML = '<div class="empty">Connect a Google Sheet to unlock AI reading passages — see Settings.</div>';
     return;
   }
+  // Theme filter: only worth showing once at least one passage has a theme.
+  const themes = Array.from(new Set(R.passages.map(p => p.Theme).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'sv'));
+  if (R.libTheme && !themes.includes(R.libTheme)) R.libTheme = '';
+  const tbox = $('rdLibTheme');
+  if (tbox) tbox.innerHTML = themes.length
+    ? '<label class="rd-lib-theme">Theme: <select id="rdLibThemeSel"><option value="">All</option>' +
+      themes.map(t => '<option value="' + esc(t) + '"' + (t === R.libTheme ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select></label>'
+    : '';
   let list = R.passages;
+  if (R.libTheme) list = list.filter(p => p.Theme === R.libTheme);
   if (R.libFilter === 'open') list = list.filter(p => !p.QuizResult);
   else if (R.libFilter === 'quizzed') list = list.filter(p => !!p.QuizResult);
   if (!list.length) { grid.innerHTML = '<div class="empty">No passages match this filter.</div>'; return; }
@@ -2104,24 +2188,35 @@ function renderLibraryGrid() {
       '<div class="rd-lib-card-top"><span class="rd-lib-date">' + esc(fmtDate(p.Created)) + (p.Level ? ' · ' + esc(p.Level) : '') + '</span>' +
       '<span class="' + chipClass + '">' + esc(chip) + '</span></div>' +
       '<div class="rd-lib-title" lang="sv">' + esc(p.Title || 'Reading passage') + '</div>' +
+      ((p.Theme || p.Written) ? '<div class="rd-lib-tags">' + (p.Theme ? '<span class="chip">' + esc(p.Theme) + '</span>' : '') +
+        (p.Written ? '<span class="chip chip-muted">Written</span>' : '') + '</div>' : '') +
       '<div class="rd-lib-meta">' + p.OpenedCount + ' of ' + p.RequestedCount + ' words opened' +
       (p.WordCount ? ' · ' + esc(String(p.WordCount)) + ' words' : '') + '</div></button>';
   }).join('');
 }
 
 function renderReadSetup() {
+  stopListening();
   const countOpts = READING_COUNT_OPTIONS.map(n =>
     '<option value="' + n + '"' + (n === R.setup.count ? ' selected' : '') + '>' + n + '</option>').join('');
-  const levels = READING_LEVELS;
+  const pills = (items, action, attr, cur) => items.map(([v, label, hint]) =>
+    '<button type="button" data-action="' + action + '" data-' + attr + '="' + v + '" aria-pressed="' + (cur === v) + '"' +
+    (hint ? ' title="' + esc(hint) + '"' : '') + '>' + esc(label) + '</button>').join('');
   $('readingBody').innerHTML =
     '<button type="button" class="link" data-action="to-library">← All passages</button>' +
     '<div class="panel rd-setup">' +
     '<h2>New passage</h2>' +
-    '<p class="rd-lib-sub">Choose how many of your due words to use, and a level. Nothing is generated until you press Generate.</p>' +
-    '<label>Words: <select id="rdSetupCount">' + countOpts + '</select></label>' +
-    '<div role="group" aria-label="Level" class="rd-pills">' +
-    levels.map(l => '<button type="button" data-action="set-level" data-level="' + l + '" aria-pressed="' + (R.setup.level === l) + '">' + l + '</button>').join('') +
-    '</div>' +
+    '<p class="rd-lib-sub">Pick a level, an optional theme and a length. Your due words are used first; if a theme is set, the story uses the ones that fit it and adds a few new theme words. Nothing is generated until you press Generate.</p>' +
+    '<div><div class="rd-setup-label">Level</div><div role="group" aria-label="Level" class="rd-pills">' +
+    pills(READING_LEVELS.map(l => [l, l]), 'set-level', 'level', R.setup.level) + '</div></div>' +
+    '<div><label class="rd-setup-label" for="rdSetupTheme">Theme <span class="rd-caption" style="margin:0">(optional)</span></label>' +
+    '<input id="rdSetupTheme" type="text" maxlength="60" autocomplete="off" placeholder="e.g. Bostad, Arbetsintervju, Resa till Göteborg" value="' + esc(R.setup.theme) + '">' +
+    '<div class="rd-pills rd-chips" role="group" aria-label="Theme suggestions" style="margin:10px 0 0">' +
+    READING_THEMES.map(t => '<button type="button" data-action="set-theme" data-theme="' + esc(t) + '" aria-pressed="' + (R.setup.theme.toLowerCase() === t.toLowerCase()) + '">' + esc(t) + '</button>').join('') +
+    '</div></div>' +
+    '<div><div class="rd-setup-label">Length</div><div role="group" aria-label="Length" class="rd-pills">' +
+    pills(READING_LENGTHS.map(([v, l, h]) => [v, l + ' · ' + h]), 'set-length', 'length', R.setup.length) + '</div></div>' +
+    '<label class="rd-setup-label">Your words: <select id="rdSetupCount">' + countOpts + '</select></label>' +
     '<p class="rd-lib-sub" id="rdSetupSummary"></p>' +
     '<div class="rd-setup-actions">' +
     '<button type="button" data-action="to-library">Cancel</button>' +
@@ -2129,14 +2224,19 @@ function renderReadSetup() {
     '</div></div>';
   updateSetupSummary();
 }
+function setupLengthLabel() { const l = READING_LENGTHS.find(x => x[0] === R.setup.length) || READING_LENGTHS[1]; return l[2]; }
 function updateSetupSummary() {
   const el = $('rdSetupSummary'); if (!el) return;
-  el.textContent = R.setup.level + ' · up to ' + R.setup.count + ' of your due words';
+  const t = R.setup.theme.trim();
+  el.textContent = R.setup.level + ' · ' + (t ? 'theme “' + t + '”' : 'any story') + ' · up to ' + R.setup.count + ' of your words' +
+    (t ? ' + a few new theme words' : '') + ' · ' + setupLengthLabel();
 }
 
 function renderReadLoading() {
+  const t = R.setup.theme.trim();
   $('readingBody').innerHTML =
-    '<div class="panel rd-passage"><p class="rd-loading-note">Writing a ' + esc(R.setup.level) + ' story with your words…</p>' +
+    '<div class="panel rd-passage"><p class="rd-loading-note">Writing a ' + esc(R.setup.level) + ' story' + (t ? ' about “' + esc(t) + '”' : '') +
+    ' with your words… this can take up to half a minute.</p>' +
     '<div class="rd-skeleton-line"></div><div class="rd-skeleton-line"></div>' +
     '<div class="rd-skeleton-line"></div><div class="rd-skeleton-line"></div>' +
     '<button type="button" class="rd-cancel-btn" data-action="cancel-loading">Cancel</button></div>';
@@ -2152,23 +2252,34 @@ async function handleGenerate() {
   if (!apiUrl) return;
   R.screen = 'loading';
   renderReadLoading();
-  let dueRows;
-  try {
-    const rows = await apiSearch('');
-    dueRows = rows.filter(r => reviewState(r).due <= todayStr());
-  } catch (e) { renderReadGenerateError(e.message); return; }
-  if (dueRows.length < READING_MIN_WORDS) {
-    $('readingBody').innerHTML = '<div class="empty">You have ' + dueRows.length + ' word' + (dueRows.length === 1 ? '' : 's') +
-      ' due today — at least ' + READING_MIN_WORDS + ' are needed for a reading passage. Review more in Practice, or add new words.</div>' +
+  const theme = R.setup.theme.trim().slice(0, 60);
+  let rows;
+  try { rows = await apiSearch(''); } catch (e) { renderReadGenerateError(e.message); return; }
+  if (rows.length < READING_MIN_WORDS) {
+    $('readingBody').innerHTML = '<div class="empty">You have ' + rows.length + ' saved word' + (rows.length === 1 ? '' : 's') +
+      ' — at least ' + READING_MIN_WORDS + ' are needed for a reading passage. Add a few words in Search first.</div>' +
       '<button type="button" class="link" data-action="to-library">← All passages</button>';
     return;
   }
-  const words = shuffle(dueRows.slice()).slice(0, R.setup.count).map(r => r[W]);
+  // Due words first (shuffled so passages vary); if fewer are due than needed,
+  // top up with the weakest / least-recently-practised words instead of
+  // refusing. With a theme the model chooses which of a larger pool fit it.
+  const today = todayStr();
+  const due = rows.filter(r => reviewState(r).due <= today);
+  const rest = rows.filter(r => reviewState(r).due > today).sort((a, b) => {
+    const sa = reviewState(a), sb = reviewState(b);
+    return (sa.reps || 0) - (sb.reps || 0) || String(sa.last || '').localeCompare(String(sb.last || ''));
+  });
+  const poolSize = Math.min(rows.length, theme ? R.setup.count * 3 : R.setup.count);
+  const words = shuffle(due.slice()).concat(rest).slice(0, poolSize).map(r => r[W]);
   R.abort = new AbortController();
   try {
-    const passage = await apiGeneratePassage(words, R.setup.level, R.abort.signal);
+    const passage = await apiGeneratePassage(words, R.setup.level, R.abort.signal, { theme, length: R.setup.length, count: R.setup.count });
     R.current = parsePassage(passage);
+    R.notice = (theme && passage[PTHEME] === undefined)
+      ? 'Your Google Sheet’s script is an older version, so the theme and length were ignored. Paste the latest code.gs into Apps Script and redeploy to use them.' : '';
     R.screen = 'reading';
+    pushReadState('#read/' + encodeURIComponent(R.current.id));
     await renderReadReading(R.current);
   } catch (e) {
     if (e.name === 'AbortError') { goToSetup(); return; }
@@ -2204,56 +2315,156 @@ function buildKnownWordMap(rows) {
 // only decides the "already in your sheet" blue styling; tapping any word,
 // known or not, opens the same check/save panel (openWordPanel below).
 // Punctuation naturally stays outside, since \p{L} only matches letters.
-function highlightParagraph(text, pIdx, knownMap) {
-  // Tokenizes the RAW text first, then escapes each piece individually —
-  // NOT esc(text).replace(...) on the already-escaped string. Escaping
-  // first would turn e.g. a literal `"` into the entity text `&quot;`,
-  // whose letters ("quot") then match \p{L}+ as if it were a real word and
-  // get wrapped in their own <button>, breaking the entity (this was always
-  // latent in the old esc-then-match order, just never visible before,
-  // since only target words got wrapped — now every word does).
+// Rough sentence split used both to draw per-sentence play buttons and to feed
+// read-aloud, so the two always agree on what "sentence 7" is.
+function splitSentences(text) {
+  return (String(text).match(/[^.!?]+[.!?]*\s*/g) || [String(text)]).filter(x => x.trim());
+}
+function wordButtonsHtml(text, pIdx, knownMap, newSet) {
   let out = '', last = 0, m;
   const re = /[\p{L}]+/gu;
   while ((m = re.exec(text))) {
     out += esc(text.slice(last, m.index));
     const tok = m[0];
     const lw = tok.toLowerCase();
-    const known = knownMap.exact.has(lw) || knownMap.stems.has(stemWord(lw));
-    out += '<button type="button" class="rd-word' + (known ? ' rd-word-known' : '') +
+    const isNew = newSet && newSet.has(pIdx + '|' + lw);
+    const known = !isNew && (knownMap.exact.has(lw) || knownMap.stems.has(stemWord(lw)));
+    out += '<button type="button" class="rd-word' + (isNew ? ' rd-word-new' : known ? ' rd-word-known' : '') +
       '" data-action="word" data-word="' + esc(tok) + '" data-pidx="' + pIdx + '">' + esc(tok) + '</button>';
     last = re.lastIndex;
   }
-  out += esc(text.slice(last));
-  return out;
+  return out + esc(text.slice(last));
 }
+// `sStart` is the global index of this paragraph's first sentence. Each
+// sentence gets a small play button (listening practice) in front of it.
+function highlightParagraph(text, pIdx, knownMap, sStart, newSet) {
+  // Tokenizes the RAW text first, then escapes each piece individually —
+  // NOT esc(text).replace(...) on the already-escaped string (an escaped
+  // `"` becomes the entity text `&quot;`, whose letters would match \p{L}+).
+  return splitSentences(text).map((sent, k) => {
+    const n = sStart + k;
+    return '<span class="rd-sent" data-s="' + n + '"><button type="button" class="rd-say" data-action="say-sentence" data-s="' + n +
+      '" aria-label="Play this sentence" title="Play this sentence">▶</button>' + wordButtonsHtml(sent, pIdx, knownMap, newSet) + '</span>';
+  }).join('');
+}
+
+/* ---------- listening: browser text-to-speech (no cost, offline-capable) ---------- */
+function svVoice() {
+  try { return (speechSynthesis.getVoices() || []).find(v => /^sv\b/i.test(v.lang) || /^sv[-_]/i.test(v.lang)) || null; } catch (e) { return null; }
+}
+function listenRate() { const r = parseFloat(store.get('ordbok_reading_speed', '1')); return r > 0 && r <= 1.5 ? r : 1; }
+function speakSv(text, onend, rate) {
+  if (!('speechSynthesis' in window)) { if (onend) onend(false); return; }
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'sv-SE'; u.rate = rate || listenRate();
+  const v = svVoice(); if (v) u.voice = v;
+  u.onend = () => { if (onend) onend(true); };
+  u.onerror = () => { if (onend) onend(false); };
+  speechSynthesis.speak(u);
+}
+function markPlaying(idx) {
+  document.querySelectorAll('#readingBody .rd-sent.playing').forEach(el => el.classList.remove('playing'));
+  if (idx < 0) return;
+  const el = document.querySelector('#readingBody .rd-sent[data-s="' + idx + '"]');
+  if (el) { el.classList.add('playing'); if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+}
+function updateListenBar() {
+  const b = $('rdPlayBtn'); if (!b) return;
+  b.textContent = R.listening ? '⏸ Pause' : (R.listenIdx > 0 ? '▶ Resume' : '▶ Play passage');
+  const hint = $('rdVoiceHint');
+  if (hint) hint.hidden = !('speechSynthesis' in window) ? false : !!svVoice() || !(speechSynthesis.getVoices() || []).length;
+}
+function stopListening() {
+  R.listenToken++; R.listening = false; R.listenIdx = -1;
+  try { speechSynthesis.cancel(); } catch (e) {}
+  markPlaying(-1); updateListenBar();
+}
+function pauseListening() {
+  R.listenToken++; R.listening = false;
+  try { speechSynthesis.cancel(); } catch (e) {}
+  updateListenBar();
+}
+// Plays sentences from `from` onward (or just one when `single`), highlighting each.
+function playSentences(from, single) {
+  if (!R.sentences.length) return;
+  try { speechSynthesis.cancel(); } catch (e) {}
+  const token = ++R.listenToken;
+  R.listening = true;
+  const step = i => {
+    if (token !== R.listenToken) return;
+    if (i >= R.sentences.length) { R.listening = false; R.listenIdx = -1; markPlaying(-1); updateListenBar(); return; }
+    R.listenIdx = i; markPlaying(i); updateListenBar();
+    speakSv(R.sentences[i].trim(), ok => {
+      if (token !== R.listenToken) return;
+      if (!ok || single) { R.listening = false; if (single) R.listenIdx = -1; markPlaying(-1); updateListenBar(); return; }
+      step(i + 1);
+    });
+  };
+  step(from);
+}
+function togglePlayPassage() {
+  if (R.listening) pauseListening();
+  else playSentences(R.listenIdx > 0 ? R.listenIdx : 0, false);
+}
+
 async function renderReadReading(passage) {
+  stopListening();
   // Falls back to no pre-highlighting (every word still tappable) rather
   // than failing the whole screen if the row fetch errors.
   let knownMap = { exact: new Map(), stems: new Map() };
   try { knownMap = buildKnownWordMap(await fetchAllRows(false)); } catch (e) {}
-  const html = passage.paragraphs.map((p, i) => '<p>' + highlightParagraph(p, i, knownMap) + '</p>').join('');
-  // A migrated (pre-rewrite) passage never had a quiz generated for it —
-  // say so plainly rather than silently showing nothing here, which used to
-  // look indistinguishable from something being broken.
+  const newSet = new Set((passage.targets || []).filter(t => t.isNew).map(t => t.paragraphIndex + '|' + String(t.surface).toLowerCase()));
+  const newWords = (passage.targets || []).filter(t => t.isNew);
+  const translations = Array.isArray(passage.translations) ? passage.translations : [];
+  R.sentences = []; let sCount = 0;
+  const html = passage.paragraphs.map((p, i) => {
+    const start = sCount;
+    const sents = splitSentences(p); sCount += sents.length; R.sentences.push(...sents);
+    return '<div class="rd-para"><p>' + highlightParagraph(p, i, knownMap, start, newSet) + '</p>' +
+      (translations[i] ? '<button type="button" class="rd-en-btn" data-action="toggle-en" data-p="' + i + '" aria-expanded="' + !!R.showEn[i] + '">' +
+        (R.showEn[i] ? 'Hide English' : 'English') + '</button>' +
+        '<p class="rd-en" lang="en"' + (R.showEn[i] ? '' : ' hidden') + '>' + esc(translations[i]) + '</p>' : '') + '</div>';
+  }).join('');
+  const hasVoice = 'speechSynthesis' in window;
+  const listenBar = hasVoice
+    ? '<div class="rd-listenbar" role="group" aria-label="Listen to the passage">' +
+      '<button type="button" id="rdPlayBtn" class="primary" data-action="play-passage">▶ Play passage</button>' +
+      '<button type="button" data-action="stop-passage">■ Stop</button>' +
+      '<label class="rd-listen-speed">Speed <select id="rdSpeed"><option value="0.7">Slow</option><option value="0.85">Relaxed</option><option value="1">Normal</option></select></label>' +
+      '<label class="rd-listen-first"><input type="checkbox" id="rdListenFirst"' + (R.hideText ? ' checked' : '') + '> Listen first (hide text)</label>' +
+      '<span class="rd-caption" id="rdVoiceHint" hidden style="margin:0">No Swedish voice found on this device; the default voice is used.</span></div>'
+    : '';
+  const wr = passage.writing && passage.writing.length;
   const quizTeaser = passage.quiz.length
     ? '<div class="panel rd-quiz-teaser"><div><strong>Finished reading?</strong><p class="rd-lib-sub">' +
       esc(passage.quizResult
         ? 'Last score ' + passage.quizResult.score + '/' + passage.quizResult.total + '. Retake it to lock the words in.'
-        : passage.quiz.length + ' quick questions on the words and the story. Missed words go to Practice.') +
+        : passage.quiz.length + ' quick questions on the words, the story and what you hear' + (wr ? ', then a short writing task' : '') + '. Missed words go to Practice.') +
       '</p></div><button type="button" class="primary" data-action="start-quiz">Take the quiz</button></div>'
     : '<div class="panel rd-quiz-teaser"><div><strong>No quiz for this one</strong><p class="rd-lib-sub">' +
       'This is an older passage from before quizzes were added, so there’s nothing to take here.</p></div></div>';
+  const newBox = newWords.length
+    ? '<div class="rd-newwords"><strong>New words in this story</strong> ' + newWords.map(t =>
+        '<button type="button" class="chip rd-newchip" lang="sv" data-action="word" data-word="' + esc(t.surface) + '" data-pidx="' + t.paragraphIndex + '">' + esc(t.lemma) + '</button>').join(' ') + '</div>'
+    : '';
+  const theme = passage.theme ? ' · ' + esc(passage.theme) : '';
   $('readingBody').innerHTML =
     '<button type="button" class="link" data-action="to-library">← All passages</button>' +
+    (R.notice ? '<div class="empty" style="margin:12px 0">' + esc(R.notice) + '</div>' : '') +
     '<div class="rd-reading-layout">' +
     '<div style="flex:1 1 560px;min-width:0;display:flex;flex-direction:column;gap:20px">' +
     '<article class="panel rd-passage" lang="sv">' +
     '<h2>' + esc(passage.title) + '</h2>' +
-    '<p class="rd-caption">' + esc(passage.level || '') + (passage.wordCount ? ' · ' + esc(String(passage.wordCount)) + ' words' : '') + '</p>' +
-    html + '</article>' + quizTeaser +
+    '<p class="rd-caption">' + esc(passage.level || '') + theme + (passage.wordCount ? ' · ' + esc(String(passage.wordCount)) + ' words' : '') + '</p>' +
+    listenBar +
+    (R.hideText ? '<div class="rd-hide-note" id="rdHideNote">Listen first, then press <button type="button" class="link" data-action="reveal-text">Show text</button>.</div>' : '') +
+    '<div id="rdText" class="rd-text' + (R.hideText ? ' rd-text-hidden' : '') + '">' + html + '</div>' + newBox + '</article>' + quizTeaser +
     '</div>' +
     '<aside id="rdPanel" class="rd-panel" hidden></aside>' +
     '</div>';
+  R.notice = '';
+  const sp = $('rdSpeed'); if (sp) sp.value = String(listenRate());
+  updateListenBar();
 }
 
 // Splits `paragraph` into rough sentences and returns the first one
@@ -2294,6 +2505,10 @@ function matchedRequestedWord(word) {
 // since every word is tappable, not only this passage's targets — but
 // findExistingRow's stemming and autofill's own Dictionary Form resolution
 // already handle an inflected form correctly, same as typing one into Search.
+function listenBtnHtml(word) {
+  return 'speechSynthesis' in window
+    ? '<button type="button" class="link rd-panel-listen" data-action="say-word" data-word="' + esc(word) + '">' + ICON_SPEAKER + ' Listen</button>' : '';
+}
 async function openWordPanel(word, pidx, btnEl) {
   const panel = $('rdPanel');
   if (!panel) return;
@@ -2312,16 +2527,16 @@ async function openWordPanel(word, pidx, btnEl) {
   try { const rows = await fetchAllRows(false); row = findExistingRow(rows, word); } catch (e) { /* fall through to "not in your words" */ }
   const closeBtn = '<button type="button" class="rd-panel-close" data-action="close-panel" aria-label="Close word details">✕</button>';
   if (row) {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + svWordHtml(row) + '</div>' + posChipHtml(row) + entryBodyHtml(row) +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + svWordHtml(row) + '</div>' + listenBtnHtml(row[W]) + posChipHtml(row) + entryBodyHtml(row) +
       '<div class="rd-panel-grade">' +
       '<button type="button" data-action="grade" data-knew="0" data-word="' + esc(word) + '">Still learning</button>' +
       '<button type="button" data-action="grade" data-knew="1" data-word="' + esc(word) + '">I know it</button>' +
       '</div>';
   } else if (!apiUrl) {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word) +
       '<p class="rd-lib-sub">Not in your words yet. Connect a Google Sheet to look it up and save it — see Settings.</p>';
   } else {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word) +
       '<p class="rd-lib-sub">Not in your words yet.</p>' +
       '<button type="button" class="primary" data-action="save-word" data-word="' + esc(word) + '" data-pidx="' + pidx + '">Save to my words</button>';
   }
@@ -2377,22 +2592,33 @@ async function saveWordFromPanel(word, pidx) {
   }
 }
 
-// ---- Quiz + results ----
-function goToQuiz(push) {
+// ---- Quiz + results + writing ----
+// `onlyIdx` (optional) restricts the quiz to those question indices — the
+// "retake missed questions" path. A retake still grades missed words in the
+// SRS but never overwrites the saved full-quiz score.
+function goToQuiz(push, onlyIdx) {
   if (!R.current || !R.current.quiz.length) return;
-  R.screen = 'quiz'; R.quizIndex = 0; R.quizChoice = null; R.quizCorrect = 0; R.quizMissedLemmas = [];
+  stopListening();
+  R.screen = 'quiz'; R.quizIndex = 0; R.quizChoice = null; R.quizCorrect = 0; R.quizMissedLemmas = []; R.quizMissedIdx = [];
+  R.quizRetake = Array.isArray(onlyIdx) && onlyIdx.length > 0;
+  R.quizItems = R.quizRetake ? onlyIdx.slice() : R.current.quiz.map((_, i) => i);
   if (push !== false) pushReadState('#read/' + encodeURIComponent(R.current.id) + '/quiz');
   renderReadQuiz();
 }
+function currentQuizQ() { return R.current.quiz[R.quizItems[R.quizIndex]]; }
 function backToReading(push) {
   R.screen = 'reading';
   if (push !== false && R.current) pushReadState('#read/' + encodeURIComponent(R.current.id));
   renderReadReading(R.current);
 }
+const QUIZ_KIND_LABEL = { word: 'Vocabulary', understanding: 'Understanding', listening: 'Listening' };
+function quizKind(q) { return q.kind || (q.wordId ? 'word' : 'understanding'); }
 function renderReadQuiz() {
   const passage = R.current;
-  const total = passage.quiz.length;
-  const q = passage.quiz[R.quizIndex];
+  if (!R.quizItems.length) R.quizItems = passage.quiz.map((_, i) => i);
+  const total = R.quizItems.length;
+  const q = currentQuizQ();
+  const kind = quizKind(q);
   const optsHtml = q.options.map((o, i) => {
     let cls = 'rd-quiz-option', mark = '';
     if (R.quizChoice !== null) {
@@ -2406,28 +2632,37 @@ function renderReadQuiz() {
   if (R.quizChoice !== null) {
     const correct = R.quizChoice === q.answerIndex;
     feedback = '<div class="rd-quiz-feedback ' + (correct ? 'correct' : 'wrong') + '">' +
-      (correct ? 'Correct!' : 'Not quite. The answer is “' + esc(q.options[q.answerIndex]) + '”.') + '</div>' +
+      (correct ? 'Correct!' : 'Not quite. The answer is “' + esc(q.options[q.answerIndex]) + '”.') +
+      (q.explanation ? '<div class="rd-quiz-expl">' + esc(q.explanation) + '</div>' : '') +
+      (kind === 'listening' && q.spoken ? '<div class="rd-quiz-expl" lang="sv">“' + esc(q.spoken) + '”</div>' : '') + '</div>' +
       '<button type="button" class="primary" data-action="quiz-next">' + (R.quizIndex + 1 < total ? 'Next question' : 'See results') + '</button>';
   }
+  const listenBtn = kind === 'listening'
+    ? '<div class="rd-quiz-listen"><button type="button" class="primary" data-action="quiz-play">▶ Play</button>' +
+      '<button type="button" data-action="quiz-play" data-slow="1">🐢 Slower</button></div>' : '';
   $('readingBody').innerHTML =
     '<div class="rd-setup-actions" style="justify-content:space-between;border:0;padding:0">' +
     '<button type="button" class="link" data-action="back-to-reading">← Back to the story</button>' +
-    '<span class="rd-caption">Question ' + (R.quizIndex + 1) + ' of ' + total + '</span></div>' +
+    '<span class="rd-caption">' + (R.quizRetake ? 'Retake · ' : '') + 'Question ' + (R.quizIndex + 1) + ' of ' + total + '</span></div>' +
     '<div class="panel rd-quiz-card">' +
-    '<div class="rd-caption">' + (q.wordId ? 'Vocabulary' : 'Understanding') + '</div>' +
-    '<div class="rd-quiz-prompt" lang="sv">' + esc(q.prompt) + '</div>' +
+    '<div class="rd-caption">' + QUIZ_KIND_LABEL[kind] + '</div>' +
+    '<div class="rd-quiz-prompt" lang="' + (kind === 'listening' ? 'en' : 'sv') + '">' + esc(q.prompt) + '</div>' + listenBtn +
     '<div class="rd-quiz-options">' + optsHtml + '</div>' + feedback + '</div>';
 }
 function answerQuiz(i) {
   if (R.quizChoice !== null) return;
-  const q = R.current.quiz[R.quizIndex];
+  const q = currentQuizQ();
   R.quizChoice = i;
   if (i === q.answerIndex) R.quizCorrect++;
-  else if (q.wordId) R.quizMissedLemmas.push(q.wordId);
+  else {
+    R.quizMissedIdx.push(R.quizItems[R.quizIndex]);
+    if (q.wordId) R.quizMissedLemmas.push(q.wordId);
+  }
   renderReadQuiz();
 }
 async function nextQuizQuestion() {
-  if (R.quizIndex + 1 < R.current.quiz.length) { R.quizIndex++; R.quizChoice = null; renderReadQuiz(); return; }
+  if (R.quizIndex + 1 < R.quizItems.length) { R.quizIndex++; R.quizChoice = null; renderReadQuiz(); return; }
+  stopListening();
   // Missed word-questions go to "still learning" in the SRS, same primitive
   // the panel's grading buttons and Practice's answer() use.
   const uniqueMissed = Array.from(new Set(R.quizMissedLemmas));
@@ -2440,9 +2675,11 @@ async function nextQuizQuestion() {
     row[RS] = JSON.stringify(st);
     try { await apiUpdateReview(row[W], st); } catch (e) { /* non-blocking */ }
   }
-  const result = { score: R.quizCorrect, total: R.current.quiz.length, missed: uniqueMissed, completedAt: new Date().toISOString() };
-  R.current.quizResult = result;
-  try { await apiUpdatePassage(R.current.id, { quizResult: result, status: 'done' }); } catch (e) { /* score still shows this session even if the save failed */ }
+  const result = { score: R.quizCorrect, total: R.quizItems.length, missed: uniqueMissed, completedAt: new Date().toISOString() };
+  if (!R.quizRetake) {
+    R.current.quizResult = result;
+    try { await apiUpdatePassage(R.current.id, { quizResult: result, status: 'done' }); } catch (e) { /* score still shows this session even if the save failed */ }
+  }
   R.screen = 'results';
   renderReadResults(result, allRows);
 }
@@ -2455,17 +2692,89 @@ function renderReadResults(result, allRows) {
       const row = findExistingRow(allRows, lemma);
       return '<div class="rd-quiz-missed-row"><span lang="sv">' + esc(lemma) + '</span><span class="rd-caption">' + esc(row ? row[EN] : '') + '</span></div>';
     }).join('') + '</div>';
+  const canWrite = R.current.writing.length > 0;
   $('readingBody').innerHTML =
     '<div class="panel rd-quiz-results">' +
     '<div class="rd-quiz-score">' + result.score + '/' + total + '</div>' +
     '<h2>' + esc(title) + '</h2>' +
-    '<p class="rd-lib-sub">Your score is saved with “' + esc(R.current.title) + '”.</p>' +
+    '<p class="rd-lib-sub">' + (R.quizRetake ? 'Retake of the questions you missed.' : 'Your score is saved with “' + esc(R.current.title) + '”.') + '</p>' +
     missedHtml +
+    (canWrite ? '<div class="rd-write-cta"><strong>Now write</strong><p class="rd-lib-sub">Answer ' + R.current.writing.length +
+      ' short questions about the story in your own Swedish sentences' + (R.current.writingResult ? ' (you have done this one before)' : '') + '.</p>' +
+      '<button type="button" class="primary" data-action="start-write">' + (R.current.writingResult ? 'See / redo my writing' : 'Start writing') + '</button></div>' : '') +
     '<div class="rd-setup-actions">' +
+    (R.quizMissedIdx.length ? '<button type="button" data-action="retake-missed">Retake missed (' + R.quizMissedIdx.length + ')</button>' : '') +
     '<button type="button" data-action="back-to-reading">Read again</button>' +
     '<button type="button" data-action="to-library">All passages</button>' +
-    '<button type="button" class="primary" data-action="new-passage">New passage</button>' +
+    '<button type="button"' + (canWrite ? '' : ' class="primary"') + ' data-action="new-passage">New passage</button>' +
     '</div></div>';
+}
+
+// ---- Writing: short Swedish answers about the story, marked by the AI ----
+function goToWrite(push) {
+  if (!R.current || !R.current.writing.length) return;
+  stopListening();
+  R.screen = 'write'; R.writeError = '';
+  if (!R.writeDraft || R.writeDraft.length !== R.current.writing.length || R.writeDraft._id !== R.current.id) {
+    R.writeDraft = R.current.writing.map(() => ''); R.writeDraft._id = R.current.id;
+  }
+  if (push !== false) pushReadState('#read/' + encodeURIComponent(R.current.id) + '/write');
+  renderReadWrite();
+}
+function renderReadWrite() {
+  const p = R.current;
+  const res = p.writingResult && Array.isArray(p.writingResult.answers) ? p.writingResult : null;
+  const top = '<div class="rd-setup-actions" style="justify-content:space-between;border:0;padding:0">' +
+    '<button type="button" class="link" data-action="back-to-reading">← Back to the story</button>' +
+    '<span class="rd-caption">Writing practice</span></div>';
+  if (res && !R.writeEditing) {
+    $('readingBody').innerHTML = top + '<div class="panel rd-write">' +
+      '<h2>Your writing</h2><p class="rd-lib-sub">Feedback is an AI suggestion — use it as a guide, not as gospel.</p>' +
+      res.answers.map(a => {
+        const same = (a.corrected || '').trim().toLowerCase() === (a.answer || '').trim().toLowerCase();
+        return '<div class="rd-write-item"><div class="rd-write-q" lang="sv">' + esc(a.question) + '</div>' +
+          '<div class="rd-write-a" lang="sv">' + esc(a.answer) + '</div>' +
+          '<span class="chip ' + (a.correct ? '' : 'chip-muted') + '">' + (a.correct ? '✓ Looks good' : 'Needs a fix') + '</span>' +
+          (!same && a.corrected ? '<div class="rd-write-fix"><span class="rd-caption" style="margin:0">Better:</span> <span lang="sv">' + esc(a.corrected) + '</span> ' +
+            (('speechSynthesis' in window) ? '<button type="button" class="link" data-action="say-word" data-word="' + esc(a.corrected) + '" aria-label="Listen to the corrected sentence">' + ICON_SPEAKER + '</button>' : '') + '</div>' : '') +
+          ((a.issues && a.issues.length) ? '<ul class="rd-write-issues">' + a.issues.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
+          (a.tip ? '<div class="rd-caption" style="margin:6px 0 0">' + esc(a.tip) + '</div>' : '') + '</div>';
+      }).join('') +
+      '<div class="rd-setup-actions"><button type="button" data-action="redo-write">Write again</button>' +
+      '<button type="button" data-action="to-library">All passages</button>' +
+      '<button type="button" class="primary" data-action="new-passage">New passage</button></div></div>';
+    return;
+  }
+  $('readingBody').innerHTML = top + '<div class="panel rd-write">' +
+    '<h2>Write your answers</h2>' +
+    '<p class="rd-lib-sub">Answer each question in Swedish with one or two full sentences. It’s fine to look back at the story first.</p>' +
+    p.writing.map((q, i) =>
+      '<label class="rd-write-item"><span class="rd-write-q" lang="sv">' + (i + 1) + '. ' + esc(q) + '</span>' +
+      '<textarea rows="2" maxlength="300" lang="sv" data-write="' + i + '" placeholder="Skriv ditt svar här…">' + esc(R.writeDraft[i] || '') + '</textarea></label>').join('') +
+    (R.writeError ? '<div class="msg err">' + esc(R.writeError) + '</div>' : '') +
+    '<div class="rd-setup-actions">' +
+    '<button type="button" data-action="back-to-reading">Skip</button>' +
+    '<button type="button" class="primary" data-action="check-write"' + (R.writeBusy ? ' disabled' : '') + '>' + (R.writeBusy ? 'Checking…' : 'Check my answers') + '</button>' +
+    '</div></div>';
+}
+async function submitWriting() {
+  if (R.writeBusy) return;
+  const p = R.current;
+  document.querySelectorAll('#readingBody textarea[data-write]').forEach(t => { R.writeDraft[parseInt(t.dataset.write, 10)] = t.value; });
+  if (R.writeDraft.some(a => !String(a || '').trim())) { R.writeError = 'Write a short answer to each question first (or press Skip).'; renderReadWrite(); return; }
+  R.writeError = ''; R.writeBusy = true; renderReadWrite();
+  try {
+    const items = p.writing.map((q, i) => ({ question: q, answer: R.writeDraft[i].trim() }));
+    const results = await apiCheckWriting(items, p.level || 'A2');
+    const out = { answers: items.map((it, i) => Object.assign({}, it, results[i])), checkedAt: new Date().toISOString() };
+    p.writingResult = out;
+    R.writeEditing = false;
+    try { await apiUpdatePassage(p.id, { writingResult: out }); } catch (e) { /* feedback still shows this session */ }
+    invalidatePassagesCache();
+  } catch (e) {
+    R.writeError = 'Could not check your writing right now (' + e.message + '). Your answers are kept — try again.';
+  } finally { R.writeBusy = false; }
+  if (R.screen === 'write') renderReadWrite();
 }
 
 /* ================= PRACTICE VIEW ================= */
@@ -2611,6 +2920,7 @@ async function answer(knew) {
 /* ================= VIEW SWITCHING ================= */
 const VIEWS = ['search', 'words', 'practice', 'reading'];
 function setView(v) {
+  if (v !== 'reading') stopListening();
   VIEWS.forEach(x => $(x + 'View').hidden = x !== v);
   document.querySelectorAll('.tabs [data-view]').forEach(b => {
     if (b.dataset.view === v) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
@@ -2993,6 +3303,38 @@ $('readingBody').addEventListener('click', e => {
   else if (action === 'back-to-reading') backToReading();
   else if (action === 'quiz-pick') answerQuiz(parseInt(btn.dataset.i, 10));
   else if (action === 'quiz-next') nextQuizQuestion();
+  else if (action === 'retake-missed') goToQuiz(true, R.quizMissedIdx.slice());
+  else if (action === 'quiz-play') {
+    const q = R.current && R.quizItems.length ? currentQuizQ() : null;
+    if (q && q.spoken) { try { speechSynthesis.cancel(); } catch (e) {} speakSv(q.spoken, null, btn.dataset.slow ? 0.6 : 0.9); }
+  }
+  else if (action === 'start-write') { R.writeEditing = false; goToWrite(); }
+  else if (action === 'redo-write') { R.writeEditing = true; R.writeDraft = R.current.writing.map(() => ''); R.writeDraft._id = R.current.id; renderReadWrite(); }
+  else if (action === 'check-write') submitWriting();
+  else if (action === 'set-theme') {
+    const t = btn.dataset.theme;
+    R.setup.theme = R.setup.theme.toLowerCase() === t.toLowerCase() ? '' : t;
+    store.set('ordbok_reading_theme', R.setup.theme);
+    renderReadSetup();
+  }
+  else if (action === 'set-length') {
+    R.setup.length = btn.dataset.length;
+    store.set('ordbok_reading_length', R.setup.length);
+    renderReadSetup();
+  }
+  else if (action === 'play-passage') togglePlayPassage();
+  else if (action === 'stop-passage') stopListening();
+  else if (action === 'say-sentence') playSentences(parseInt(btn.dataset.s, 10), true);
+  else if (action === 'say-word') { try { speechSynthesis.cancel(); } catch (e) {} speakSv(btn.dataset.word, null, 0.9); }
+  else if (action === 'toggle-en') {
+    const i = parseInt(btn.dataset.p, 10);
+    R.showEn[i] = !R.showEn[i];
+    const en = btn.nextElementSibling;
+    if (en) en.hidden = !R.showEn[i];
+    btn.textContent = R.showEn[i] ? 'Hide English' : 'English';
+    btn.setAttribute('aria-expanded', String(!!R.showEn[i]));
+  }
+  else if (action === 'reveal-text') { R.hideText = false; const t = $('rdText'); if (t) t.classList.remove('rd-text-hidden'); const n = $('rdHideNote'); if (n) n.remove(); const c = $('rdListenFirst'); if (c) c.checked = false; }
 });
 // Quiz keyboard shortcuts: 1-4 pick an option, Enter advances once answered —
 // only active while the quiz screen is showing, so it never steals keys from
@@ -3002,13 +3344,32 @@ document.addEventListener('keydown', e => {
   if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
   if (['1', '2', '3', '4'].includes(e.key)) {
     const i = Number(e.key) - 1;
-    const q = R.current && R.current.quiz[R.quizIndex];
+    const q = R.current && R.quizItems.length ? currentQuizQ() : null;
     if (q && i < q.options.length) answerQuiz(i);
   } else if (e.key === 'Enter' && R.quizChoice !== null) {
     nextQuizQuestion();
   }
 });
+$('readingBody').addEventListener('input', e => {
+  if (e.target.id === 'rdSetupTheme') {
+    R.setup.theme = e.target.value.slice(0, 60);
+    store.set('ordbok_reading_theme', R.setup.theme);
+    updateSetupSummary();
+    document.querySelectorAll('.rd-chips [data-theme]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme.toLowerCase() === R.setup.theme.trim().toLowerCase())));
+  } else if (e.target.dataset && e.target.dataset.write !== undefined) {
+    R.writeDraft[parseInt(e.target.dataset.write, 10)] = e.target.value;
+  }
+});
 $('readingBody').addEventListener('change', e => {
+  if (e.target.id === 'rdLibThemeSel') { R.libTheme = e.target.value; renderLibraryGrid(); }
+  else if (e.target.id === 'rdSpeed') { store.set('ordbok_reading_speed', e.target.value); }
+  else if (e.target.id === 'rdListenFirst') {
+    R.hideText = e.target.checked;
+    const t = $('rdText'); if (t) t.classList.toggle('rd-text-hidden', R.hideText);
+    const n = $('rdHideNote');
+    if (R.hideText && !n && t) t.insertAdjacentHTML('beforebegin', '<div class="rd-hide-note" id="rdHideNote">Listen first, then press <button type="button" class="link" data-action="reveal-text">Show text</button>.</div>');
+    else if (!R.hideText && n) n.remove();
+  }
   if (e.target.id === 'rdSetupCount') {
     R.setup.count = parseInt(e.target.value, 10) || READING_COUNT_DEFAULT;
     store.set('ordbok_reading_count', String(R.setup.count));
