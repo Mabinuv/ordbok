@@ -142,7 +142,8 @@ const texts = files.map(f => { try { return [f, read(f)]; } catch { return [f, '
   } catch (e) { problems.push('manifest.webmanifest: ' + e.message); }
   try { readFileSync(join(root, 'sw.js')); } catch (e) { problems.push('sw.js is missing'); }
   const ignore = read('.vercelignore');
-  for (const f of ['index.html', 'manifest.webmanifest', 'sw.js', 'icons/']) if (!ignore.split('\n').some(l => l.trim() === '!' + f)) problems.push('.vercelignore does not allow ' + f);
+  const allowed = ignore.split('\n').map(l => l.trim()).filter(l => l.startsWith('!')).map(l => l.slice(1).replace(/^\//, '').replace(/\/$/, ''));
+  for (const f of ['index.html', 'manifest.webmanifest', 'sw.js', 'icons', 'icons/*.png']) if (!allowed.includes(f)) problems.push('.vercelignore does not allow /' + f + ' (use the form !/' + f + ')');
   if (!/rel="manifest"/.test(html)) problems.push('index.html has no <link rel="manifest">');
   report(problems.length ? 'FAIL' : 'PASS', 'PWA: manifest, icons, service worker published', problems);
 }

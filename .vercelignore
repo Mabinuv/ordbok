@@ -1,8 +1,8 @@
 # Allowlist: only the app itself is published. Keeps notes (CLAUDE.md),
 # backend source (code.gs), README and .claude/ off the public site.
 /*
-!index.html
-!manifest.webmanifest
-!sw.js
-!icons/
-!icons/*.png
+!/index.html
+!/manifest.webmanifest
+!/sw.js
+!/icons
+!/icons/*.png
