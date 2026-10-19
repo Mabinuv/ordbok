@@ -110,7 +110,7 @@ const LEVEL_GUIDANCE = {
 // sheet otherwise, and a Sheets API read is the slowest part of a search by
 // far, so this is the main lever for making search feel instant. Any
 // save/edit/learn immediately clears the cache so you never see stale data.
-const SEARCH_CACHE_SECONDS = 50;
+const SEARCH_CACHE_SECONDS = 300;
 
 // savedEntry (optional) switches on "check mode", used by the client's
 // "Check my words" tool: the model also judges the saved entry and returns
@@ -215,6 +215,9 @@ function autofill_(word, sourceSentence, savedEntry) {
         // and only accept the default temperature (1), so `temperature` is
         // omitted here rather than set to 0.3 as it used to be.
         max_completion_tokens: AUTOFILL_MAX_TOKENS,
+        // Short structured dictionary entry: heavy hidden reasoning only adds
+        // latency (and eats into the token cap). 'low' is accepted across the gpt-5 family.
+        reasoning_effort: 'low',
         response_format: { type: 'json_object' },
         messages: [{ role: 'system', content: system }, { role: 'user', content: userMessage }],
       }),
@@ -643,12 +646,50 @@ function json_(obj) {
 // SEARCH_CACHE_SECONDS) because the Sheets read is what makes search feel
 // slow — a full sheet scan happens at most once every ~50s per cache slot
 // instead of on every keystroke. invalidateCache_() clears it on any write.
+// CacheService rejects any single value over 100 KB, and the whole word list
+// (Grammar Forms make a row ~1 KB) passes that at roughly 100 words — after
+// which the old single-key put() failed silently and EVERY request re-read the
+// whole sheet. So the list is stored as several chunks under 'key:0..n-1' plus
+// a 'key' entry holding the chunk count. Chunks stay well under the byte limit
+// even when most characters are 2-byte (å/ä/ö).
+const CACHE_CHUNK_CHARS = 40000;
+function cachePutChunked_(key, obj, seconds) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const str = JSON.stringify(obj);
+    const entries = {};
+    let n = 0;
+    for (let i = 0; i < str.length; i += CACHE_CHUNK_CHARS) entries[key + ':' + (n++)] = str.slice(i, i + CACHE_CHUNK_CHARS);
+    entries[key] = String(n);
+    cache.putAll(entries, seconds);
+  } catch (e) { /* cache unavailable/too large — fine, just slower */ }
+}
+function cacheGetChunked_(key) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const n = parseInt(cache.get(key), 10);
+    if (!(n > 0)) return null;
+    const keys = [];
+    for (let i = 0; i < n; i++) keys.push(key + ':' + i);
+    const got = cache.getAll(keys);
+    let str = '';
+    for (let i = 0; i < n; i++) { const part = got[keys[i]]; if (part == null) return null; str += part; }
+    return JSON.parse(str);
+  } catch (e) { return null; }
+}
+function cacheRemoveChunked_(key) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const n = parseInt(cache.get(key), 10) || 0;
+    const keys = [key];
+    for (let i = 0; i < n; i++) keys.push(key + ':' + i);
+    cache.removeAll(keys);
+  } catch (e) {}
+}
+
 function readAll_() {
-  const cache = CacheService.getScriptCache();
-  const cached = cache.get('rows_v1');
-  if (cached) {
-    try { return JSON.parse(cached); } catch (e) { /* fall through to re-read */ }
-  }
+  const cached = cacheGetChunked_('rows_v1');
+  if (cached) return cached;
   const sh = getSheet_();
   const map = headerMap_(sh);
   const lastCol = sh.getLastColumn();
@@ -661,12 +702,12 @@ function readAll_() {
       HEADERS.forEach(h => { const c = map[h]; o[h] = c ? String(r[c - 1] == null ? '' : r[c - 1]) : ''; });
       return o;
     });
-  try { cache.put('rows_v1', JSON.stringify(rows), SEARCH_CACHE_SECONDS); } catch (e) { /* row set too large to cache — fine, just slower */ }
+  cachePutChunked_('rows_v1', rows, SEARCH_CACHE_SECONDS);
   return rows;
 }
 
 function invalidateCache_() {
-  try { CacheService.getScriptCache().remove('rows_v1'); } catch (e) {}
+  cacheRemoveChunked_('rows_v1');
 }
 
 // Same caching shape as readAll_()/invalidateCache_() above, but for the
@@ -674,11 +715,8 @@ function invalidateCache_() {
 // parallel function rather than a generalized/parameterized readAll_(), so a
 // change to one read path can never accidentally affect the other's cache key.
 function readAllPassages_() {
-  const cache = CacheService.getScriptCache();
-  const cached = cache.get(PASSAGES_CACHE_KEY);
-  if (cached) {
-    try { return JSON.parse(cached); } catch (e) { /* fall through to re-read */ }
-  }
+  const cached = cacheGetChunked_(PASSAGES_CACHE_KEY);
+  if (cached) return cached;
   const sh = getPassagesSheet_();
   const map = headerMap_(sh);
   const lastCol = sh.getLastColumn();
@@ -691,12 +729,12 @@ function readAllPassages_() {
       PASSAGES_HEADERS.forEach(h => { const c = map[h]; o[h] = c ? String(r[c - 1] == null ? '' : r[c - 1]) : ''; });
       return o;
     });
-  try { cache.put(PASSAGES_CACHE_KEY, JSON.stringify(rows), SEARCH_CACHE_SECONDS); } catch (e) { /* row set too large to cache — fine, just slower */ }
+  cachePutChunked_(PASSAGES_CACHE_KEY, rows, SEARCH_CACHE_SECONDS);
   return rows;
 }
 
 function invalidatePassagesCache_() {
-  try { CacheService.getScriptCache().remove(PASSAGES_CACHE_KEY); } catch (e) {}
+  cacheRemoveChunked_(PASSAGES_CACHE_KEY);
 }
 
 // Same shape as findRow_() below, but matches the Passages tab's 'Id' column
@@ -731,16 +769,124 @@ function appendPassageRow_(sh, map, passage) {
   sh.getRange(sh.getLastRow() + 1, 1, 1, lastCol).setValues([rowValues]);
 }
 
-function findRow_(sh, word) {
+function findRow_(sh, word, knownMap) {
   const target = String(word).trim().toLowerCase();
   if (!target) return -1;
-  const map = headerMap_(sh);
+  const map = knownMap || headerMap_(sh);
   const wordCol = map['Swedish Word'];
   const words = sh.getRange(1, wordCol, sh.getLastRow(), 1).getValues();
   for (let i = 1; i < words.length; i++) {
     if (String(words[i][0]).trim().toLowerCase() === target) return i + 1;
   }
   return -1;
+}
+
+// Applies an ordered list of write ops (the same bodies doPost accepts one at a
+// time: setLearned / updateReview / delete / a word upsert) against the Words
+// sheet with a single read and a single write. Later ops see earlier ones, so a
+// queued "save, then grade" sequence behaves exactly as if sent one by one.
+// Returns one { ok, error? } per op; a failing op never aborts the others.
+function applyBatch_(sh, map, ops) {
+  const lastCol = sh.getLastColumn();
+  const lastRow = sh.getLastRow();
+  const wordCol = map['Swedish Word'] - 1;
+  const origCount = Math.max(0, lastRow - 1);
+  const rows = (lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, lastCol).getValues() : [])
+    .map(v => ({ v: v, dirty: false, isNew: false }));
+  let index = null, deleted = false;
+  const find = word => {
+    if (!index) {
+      index = new Map();
+      rows.forEach((r, i) => { const w = norm_(r.v[wordCol]); if (w && !index.has(w)) index.set(w, i); });
+    }
+    const i = index.get(norm_(word));
+    return i === undefined ? -1 : i;
+  };
+  const results = ops.map(op => {
+    try {
+      if (!op || typeof op !== 'object') return { ok: false, error: 'Bad operation' };
+      if (op.action === 'setLearned' || op.action === 'updateReview') {
+        const i = find(op.word);
+        if (i < 0) return { ok: false, error: 'Word not found in the sheet' };
+        if (op.action === 'setLearned') rows[i].v[map['Learned'] - 1] = op.learned ? 'Yes' : '';
+        else rows[i].v[map['Review State'] - 1] = String(op.reviewState || '{}');
+        rows[i].dirty = true;
+        return { ok: true };
+      }
+      if (op.action === 'delete') {
+        const i = find(op.word);
+        if (i < 0) return { ok: false, error: 'Word not found in the sheet' };
+        rows.splice(i, 1); index = null; deleted = true;
+        return { ok: true };
+      }
+      if (op.action) return { ok: false, error: 'Unknown action' };
+      const word = String(op['Swedish Word'] || '').trim();
+      if (!word) return { ok: false, error: 'Swedish Word is required' };
+      const previousWord = String(op.previousWord || '').trim();
+      let target = find(word);
+      if (target >= 0) {
+        if (previousWord && norm_(previousWord) !== norm_(word)) {
+          const prior = find(previousWord);
+          if (prior >= 0 && prior !== target) {
+            mergeRowValues_(map, rows[target].v, rows[prior].v);
+            rows.splice(prior, 1); index = null; deleted = true;
+            if (prior < target) target -= 1;
+          }
+        }
+      } else if (previousWord) {
+        const prior = find(previousWord);
+        if (prior >= 0) target = prior;
+      }
+      if (target >= 0) {
+        overlayRow_(rows[target].v, map, op);
+        rows[target].dirty = true;
+        index = null;   // the headword itself may have changed
+      } else {
+        const v = new Array(lastCol).fill('');
+        overlayRow_(v, map, op);
+        rows.push({ v: v, dirty: true, isNew: true });
+        index = null;
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  });
+  if (deleted) {
+    // Rows shifted: rewrite the data block once, then trim the leftover tail.
+    if (rows.length) sh.getRange(2, 1, rows.length, lastCol).setValues(rows.map(r => r.v));
+    if (rows.length < origCount) sh.deleteRows(rows.length + 2, origCount - rows.length);
+  } else {
+    const existing = rows.filter(r => !r.isNew);
+    if (existing.some(r => r.dirty)) sh.getRange(2, 1, existing.length, lastCol).setValues(existing.map(r => r.v));
+    const added = rows.filter(r => r.isNew);
+    if (added.length) sh.getRange(origCount + 2, 1, added.length, lastCol).setValues(added.map(r => r.v));
+  }
+  return results;
+}
+
+// Writes the fields present in `data` onto a row's value array (in place):
+// Swedish Word lowercased, Seen As merged rather than replaced, Learned kept
+// unless supplied. Shared by the single-row upsert and the batch action.
+function overlayRow_(rowValues, map, data) {
+  HEADERS.forEach(h => {
+    const c = map[h]; if (!c) return;
+    if (h === 'Learned') {
+      if (data.Learned !== undefined) rowValues[c - 1] = String(data.Learned);
+      // else: keep whatever was already there (existing value, or '' for a new row)
+    } else if (h === 'Swedish Word' && data[h] !== undefined) {
+      // Lowercased on write so the stored headword is always the canonical
+      // dictionary-form key (matching stays case-insensitive throughout).
+      rowValues[c - 1] = String(data[h]).trim().toLowerCase();
+    } else if (h === 'Seen As' && data[h] !== undefined) {
+      // Merge, don't overwrite — accumulates every inflected form the word
+      // has ever been looked up as, e.g. ["gick"] then later ["gått"].
+      const merged = Array.from(new Set(safeParseArr_(rowValues[c - 1]).concat(safeParseArr_(data[h]))));
+      rowValues[c - 1] = JSON.stringify(merged);
+    } else if (data[h] !== undefined) {
+      rowValues[c - 1] = String(data[h]).trim();
+    }
+  });
 }
 
 function norm_(s) {
@@ -758,15 +904,20 @@ function safeParseArr_(s) {
 // Seen As is unioned; Learned/Review State keep target's value if it already
 // has one, else fall back to source's.
 function mergeRowInto_(sh, map, targetRow, sourceRow) {
+  const lastCol = sh.getLastColumn();
+  const t = sh.getRange(targetRow, 1, 1, lastCol).getValues()[0];
+  const src = sh.getRange(sourceRow, 1, 1, lastCol).getValues()[0];
+  mergeRowValues_(map, t, src);
+  sh.getRange(targetRow, 1, 1, lastCol).setValues([t]);
+}
+// In-memory half of the merge, shared with the batch path: mutates `t`.
+function mergeRowValues_(map, t, src) {
   ['Learned', 'Review State', 'Seen As'].forEach(h => {
     const c = map[h]; if (!c) return;
-    const targetCell = sh.getRange(targetRow, c);
-    const sourceVal = sh.getRange(sourceRow, c).getValue();
     if (h === 'Seen As') {
-      const merged = Array.from(new Set(safeParseArr_(targetCell.getValue()).concat(safeParseArr_(sourceVal))));
-      targetCell.setValue(JSON.stringify(merged));
-    } else if (!String(targetCell.getValue()).trim()) {
-      targetCell.setValue(sourceVal);
+      t[c - 1] = JSON.stringify(Array.from(new Set(safeParseArr_(t[c - 1]).concat(safeParseArr_(src[c - 1])))));
+    } else if (!String(t[c - 1]).trim()) {
+      t[c - 1] = src[c - 1];
     }
   });
 }
@@ -987,8 +1138,17 @@ function doPost(e) {
     const sh = getSheet_();
     const map = headerMap_(sh);
 
+    // Many queued client writes in one request: one lock, one read of the
+    // sheet, in-memory application in order, one write back, one cache flush.
+    if (data.action === 'batch') {
+      const ops = Array.isArray(data.ops) ? data.ops.slice(0, 100) : [];
+      const results = applyBatch_(sh, map, ops);
+      invalidateCache_();
+      return json_({ ok: true, results: results });
+    }
+
     if (data.action === 'setLearned') {
-      const row = findRow_(sh, data.word);
+      const row = findRow_(sh, data.word, map);
       if (row < 0) return json_({ ok: false, error: 'Word not found in the sheet' });
       sh.getRange(row, map['Learned']).setValue(data.learned ? 'Yes' : '');
       invalidateCache_();
@@ -996,7 +1156,7 @@ function doPost(e) {
     }
 
     if (data.action === 'updateReview') {
-      const row = findRow_(sh, data.word);
+      const row = findRow_(sh, data.word, map);
       if (row < 0) return json_({ ok: false, error: 'Word not found in the sheet' });
       sh.getRange(row, map['Review State']).setValue(String(data.reviewState || '{}'));
       invalidateCache_();
@@ -1004,7 +1164,7 @@ function doPost(e) {
     }
 
     if (data.action === 'delete') {
-      const row = findRow_(sh, data.word);
+      const row = findRow_(sh, data.word, map);
       if (row < 0) return json_({ ok: false, error: 'Word not found in the sheet' });
       sh.deleteRow(row);
       invalidateCache_();
@@ -1025,11 +1185,11 @@ function doPost(e) {
     // rename/overwrite that row in place (the bug-fix path: e.g. regenerating
     // "saknade" into its dictionary form "sakna" must not orphan the old row).
     // (c) neither -> insert a new row, same as today.
-    let targetRow = findRow_(sh, word);
+    let targetRow = findRow_(sh, word, map);
 
     if (targetRow > 0) {
       if (previousWord && norm_(previousWord) !== norm_(word)) {
-        const priorRow = findRow_(sh, previousWord);
+        const priorRow = findRow_(sh, previousWord, map);
         if (priorRow > 0 && priorRow !== targetRow) {
           mergeRowInto_(sh, map, targetRow, priorRow);
           sh.deleteRow(priorRow);
@@ -1037,7 +1197,7 @@ function doPost(e) {
         }
       }
     } else if (previousWord) {
-      const priorRow = findRow_(sh, previousWord);
+      const priorRow = findRow_(sh, previousWord, map);
       if (priorRow > 0) targetRow = priorRow;
     }
 
@@ -1045,24 +1205,7 @@ function doPost(e) {
       ? sh.getRange(targetRow, 1, 1, lastCol).getValues()[0]
       : new Array(lastCol).fill('');
 
-    HEADERS.forEach(h => {
-      const c = map[h]; if (!c) return;
-      if (h === 'Learned') {
-        if (data.Learned !== undefined) rowValues[c - 1] = String(data.Learned);
-        // else: keep whatever was already there (existing value, or '' for a new row)
-      } else if (h === 'Swedish Word' && data[h] !== undefined) {
-        // Lowercased on write so the stored headword is always the canonical
-        // dictionary-form key (matching stays case-insensitive throughout).
-        rowValues[c - 1] = String(data[h]).trim().toLowerCase();
-      } else if (h === 'Seen As' && data[h] !== undefined) {
-        // Merge, don't overwrite — accumulates every inflected form the word
-        // has ever been looked up as, e.g. ["gick"] then later ["gått"].
-        const merged = Array.from(new Set(safeParseArr_(rowValues[c - 1]).concat(safeParseArr_(data[h]))));
-        rowValues[c - 1] = JSON.stringify(merged);
-      } else if (data[h] !== undefined) {
-        rowValues[c - 1] = String(data[h]).trim();
-      }
-    });
+    overlayRow_(rowValues, map, data);
 
     if (targetRow > 0) {
       sh.getRange(targetRow, 1, 1, lastCol).setValues([rowValues]);

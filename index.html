@@ -145,6 +145,8 @@ applyTheme(store.get('ordbok_theme', ''));
   .mode { font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .pill { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
   .pill.live { color: var(--ok); border-color: var(--ok); }
+  button.pill { font: inherit; cursor: pointer; color: var(--muted); }
+  .pill.warn { color: var(--berry); border-color: currentColor; }
 
   /* ---------- Search view (opening page) ---------- */
   #searchView { max-width: 600px; margin: 0 auto; }
@@ -510,6 +512,7 @@ applyTheme(store.get('ordbok_theme', ''));
       <p class="sub stats" id="headerStats" hidden></p>
       <div class="mode">
         <span id="modePill" class="pill">Demo mode: saved in this browser</span>
+        <button id="syncPill" class="pill" type="button" hidden>Syncing…</button>
         <button class="secondary" id="checkBtn" type="button" hidden>Check my words</button>
       </div>
     </div>
@@ -708,10 +711,17 @@ const isLearned = r => String(r[L] || '').toLowerCase() === 'yes';
 const keyOf = r => r[W].toLowerCase();
 
 /* ---------- data layer: Google Sheet when connected, browser otherwise ---------- */
+// Parsed once and kept in memory (re-parsing the whole localStorage string on
+// every keystroke/lookup was the Demo-mode hot path); only writes re-stringify.
+let localCache = null;
 function localRows() {
-  try { return JSON.parse(store.get('ordbok_rows', '[]')); } catch (e) { return memoryFallback; }
+  if (!localCache) {
+    try { localCache = JSON.parse(store.get('ordbok_rows', '[]')); } catch (e) { localCache = memoryFallback; }
+    if (!Array.isArray(localCache)) localCache = [];
+  }
+  return localCache;
 }
-function saveLocalRows(rows) { memoryFallback = rows; store.set('ordbok_rows', JSON.stringify(rows)); }
+function saveLocalRows(rows) { localCache = rows; memoryFallback = rows; store.set('ordbok_rows', JSON.stringify(rows)); }
 
 /* ---------- "find it in any form" matching (dictionary-style search) ---------- */
 // Best-effort Swedish suffix stripper. Used only as a fallback for words that
@@ -738,39 +748,109 @@ function stemWord(w) {
 // finally a stem-based fallback against the base word.
 function clientMatches(row, q, qStem) {
   if (!q) return true;
-  const word = (row[W] || '').toLowerCase(), meaning = (row[EN] || '').toLowerCase();
-  if (word.includes(q) || meaning.includes(q)) return true;
-  const forms = parseForms(row[GF]);
-  for (const f of forms) {
-    const sv = (f.sv || '').toLowerCase();
-    if (sv && (sv === q || sv.includes(q))) return true;
-  }
+  const x = rowIndex(row);
+  if (x.w.includes(q) || x.en.includes(q)) return true;
+  for (const f of x.forms) if (f.includes(q)) return true;
   // "Seen As": inflected forms the word was looked up as before it got saved
   // under its dictionary form, e.g. searching "gick" finds a row saved as "gå".
-  for (const s of parseSeenAs(row[SEEN])) {
-    const sv = s.toLowerCase();
-    if (sv && (sv === q || sv.includes(q))) return true;
-  }
-  return !!(qStem && qStem.length >= 4 && stemWord(word) === qStem);
+  for (const s of x.seen) if (s.includes(q)) return true;
+  return !!(qStem && qStem.length >= 4 && x.stem === qStem);
+}
+// Lowercased/parsed search fields, computed once per row object instead of
+// re-running JSON.parse + stemWord for every row on every keystroke. The raw
+// source strings are kept so an in-place edit of a row invalidates its entry.
+const rowIdx = new WeakMap();
+function rowIndex(r) {
+  let x = rowIdx.get(r);
+  if (x && x.rw === r[W] && x.ren === r[EN] && x.rgf === r[GF] && x.rsn === r[SEEN]) return x;
+  const w = (r[W] || '').toLowerCase();
+  x = {
+    rw: r[W], ren: r[EN], rgf: r[GF], rsn: r[SEEN],
+    w, en: (r[EN] || '').toLowerCase(), stem: stemWord(w),
+    forms: parseForms(r[GF]).map(f => ((f && f.sv) || '').toLowerCase()).filter(Boolean),
+    seen: parseSeenAs(r[SEEN]).map(s => String(s).toLowerCase()).filter(Boolean),
+  };
+  rowIdx.set(r, x);
+  return x;
 }
 
-// Client-side cache of the full word list, so typing in the search box filters
-// in memory instead of round-tripping to Apps Script/Sheets on every
-// keystroke (that round trip is what made search feel slow). Cleared/refetched
-// after any save/edit/learn so changes show up right away, and refreshed
-// automatically after a short TTL so other people's edits to a shared sheet appear.
+// Local-first word store. The full list lives in memory AND in localStorage, so
+// a lookup/search never waits on the network: fetchAllRows() answers from the
+// local copy straight away and, when it is older than ALL_ROWS_TTL_MS (or the
+// tab regains focus), refreshes from the sheet in the background and re-renders
+// only if something changed. Our own writes patch this copy optimistically and
+// reach the sheet through the outbox below, so nothing needs to invalidate it.
 let allRowsCache = null;
 let allRowsCacheAt = 0;
-const ALL_ROWS_TTL_MS = 30000;
-function invalidateRowsCache() { allRowsCache = null; }
+let rowsInflight = null;
+let writeEpoch = 0;                  // bumped by every local write; a refresh that started before one is discarded
+const ALL_ROWS_TTL_MS = 5 * 60 * 1000;
+const ROWS_CACHE_KEY = 'ordbok_rows_cache';
+let persistTimer = null;
+function persistRowsCache() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    if (!apiUrl || !allRowsCache) return;
+    store.set(ROWS_CACHE_KEY, JSON.stringify({ url: apiUrl, at: allRowsCacheAt, rows: allRowsCache }));
+  }, 400);
+}
+function hydrateRowsCache() {
+  if (!apiUrl) return;
+  const c = safeJson(store.get(ROWS_CACHE_KEY, ''), null);
+  if (c && c.url === apiUrl && Array.isArray(c.rows)) { allRowsCache = c.rows; allRowsCacheAt = c.at || 0; }
+}
+// Only for "the sheet itself changed" (e.g. a different Web App URL was saved).
+function invalidateRowsCache() {
+  allRowsCache = null; allRowsCacheAt = 0; clearTimeout(persistTimer);
+  store.remove(ROWS_CACHE_KEY);
+}
+// Optimistic local edit of the cached list (Connected mode); fn returns the new array.
+function cacheMutate(fn) {
+  writeEpoch++;
+  if (!allRowsCache) return;
+  allRowsCache = fn(allRowsCache);
+  persistRowsCache();
+}
+function networkFetchRows() {
+  if (rowsInflight) return rowsInflight;
+  const url = apiUrl;
+  rowsInflight = (async () => {
+    const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'q=');
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Search failed');
+    // Writes still waiting in the outbox aren't on the sheet yet — lay them on top.
+    let rows = data.rows;
+    for (const op of pendingOps()) rows = applyOpToRows(rows, op);
+    return rows;
+  })().finally(() => { rowsInflight = null; });
+  return rowsInflight;
+}
+async function loadRows() {
+  const epoch = writeEpoch;
+  const rows = await networkFetchRows();
+  if (allRowsCache && epoch !== writeEpoch) return allRowsCache;   // a local write landed meanwhile: keep the newer local state
+  allRowsCacheAt = Date.now();
+  if (!allRowsCache || JSON.stringify(rows) !== JSON.stringify(allRowsCache)) allRowsCache = rows;
+  persistRowsCache();
+  return allRowsCache;
+}
+function refreshRowsInBackground(minAgeMs) {
+  if (!apiUrl || rowsInflight || (Date.now() - allRowsCacheAt) < (minAgeMs || 0)) return;
+  const had = allRowsCache;
+  loadRows().then(() => { if (allRowsCache !== had) onRowsRefreshed(); }).catch(() => {});
+}
+// Re-shows the current page after a background refresh brought in changes.
+function onRowsRefreshed() {
+  if (!$('wordsView').hidden) runSearch();
+  else if (!$('searchView').hidden && $('searchView').classList.contains('idle')) refreshDueLine();
+}
 async function fetchAllRows(force) {
   if (!apiUrl) return localRows();
-  if (!force && allRowsCache && (Date.now() - allRowsCacheAt) < ALL_ROWS_TTL_MS) return allRowsCache;
-  const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'q=');
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || 'Search failed');
-  allRowsCache = data.rows; allRowsCacheAt = Date.now();
-  return allRowsCache;
+  if (allRowsCache && !force) {
+    if (Date.now() - allRowsCacheAt > ALL_ROWS_TTL_MS) refreshRowsInBackground();
+    return allRowsCache;
+  }
+  return loadRows();
 }
 
 // Passages: same caching shape as fetchAllRows above, but its own cache
@@ -780,6 +860,7 @@ async function fetchAllRows(force) {
 // server's ?passages=1 already returns, so callers never need to branch.
 let allPassagesCache = null;
 let allPassagesCacheAt = 0;
+const PASSAGES_TTL_MS = 30000;
 function invalidatePassagesCache() { allPassagesCache = null; }
 function passageListView_(p) {
   return {
@@ -795,7 +876,7 @@ function passageListView_(p) {
 }
 async function apiListPassages(force) {
   if (!apiUrl) return safeJson(store.get(DEMO_PASSAGES_KEY, ''), []).map(passageListView_);
-  if (!force && allPassagesCache && (Date.now() - allPassagesCacheAt) < ALL_ROWS_TTL_MS) return allPassagesCache;
+  if (!force && allPassagesCache && (Date.now() - allPassagesCacheAt) < PASSAGES_TTL_MS) return allPassagesCache;
   const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'passages=1');
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || 'Could not load passages');
@@ -855,17 +936,10 @@ function findExistingRow(rows, word, exceptWord) {
   const except = exceptWord ? exceptWord.trim().toLowerCase() : null;
   const qStem = stemWord(q);
   for (const r of rows) {
-    const w = (r[W] || '').toLowerCase();
-    if (except && w === except) continue;
-    if (w === q) return r;
-    const forms = parseForms(r[GF]);
-    for (const f of forms) {
-      if ((f.sv || '').toLowerCase() === q) return r;
-    }
-    for (const s of parseSeenAs(r[SEEN])) {
-      if (s.toLowerCase() === q) return r;
-    }
-    if (qStem.length >= 4 && stemWord(w) === qStem) return r;
+    const x = rowIndex(r);
+    if (except && x.w === except) continue;
+    if (x.w === q || x.forms.includes(q) || x.seen.includes(q)) return r;
+    if (qStem.length >= 4 && x.stem === qStem) return r;
   }
   return null;
 }
@@ -920,59 +994,165 @@ async function apiSearch(q) {
   const qStem = stemWord(n);
   return rows.filter(r => clientMatches(r, n, qStem));
 }
+// Pure version of the save/rename/merge rules (lowercase key, Seen-As union,
+// previousWord rename or true-duplicate fold, Learned/Review State carried
+// over). Shared by Demo-mode storage, the optimistic Connected-mode cache and
+// the re-application of pending outbox writes, so they can never drift apart.
+// Mirrors doPost's upsert in code.gs. Returns { rows: newArray, action }.
+function applySaveToRows(rows, row) {
+  rows = rows.slice();
+  const key = String(row[W]).toLowerCase();
+  const prev = row.previousWord ? String(row.previousWord).trim().toLowerCase() : '';
+  const out = Object.assign({}, row);
+  delete out.previousWord;
+  out[W] = key;
+  out[GF] = out[GF] || '[]';
+  let iNew = rows.findIndex(r => r[W].toLowerCase() === key);
+  const iOld = (prev && prev !== key) ? rows.findIndex(r => r[W].toLowerCase() === prev) : -1;
+
+  if (iNew >= 0) {
+    const base = rows[iNew];
+    let seen = parseSeenAs(base[SEEN]).concat(parseSeenAs(out[SEEN]));
+    const merged = Object.assign({}, base, out);
+    merged[L] = base[L] || ''; merged[RS] = base[RS] || '';
+    if (iOld >= 0 && iOld !== iNew) {
+      // True-duplicate cleanup: previousWord independently matches a DIFFERENT
+      // existing row. Fold its history into the surviving row, then drop it.
+      merged[L] = merged[L] || rows[iOld][L] || '';
+      merged[RS] = merged[RS] || rows[iOld][RS] || '';
+      seen = seen.concat(parseSeenAs(rows[iOld][SEEN]));
+      rows.splice(iOld, 1);
+      if (iOld < iNew) iNew -= 1;   // removed row shifts later indices down
+    }
+    merged[SEEN] = JSON.stringify(Array.from(new Set(seen)));
+    rows[iNew] = merged;
+    return { rows, action: 'updated' };
+  }
+  if (iOld >= 0) {
+    // No row for the new word, but the row it used to be saved as still
+    // exists: rename it in place so Learned/Review State/Seen As survive.
+    const base = rows[iOld];
+    const merged = Object.assign({}, base, out);
+    merged[L] = base[L] || ''; merged[RS] = base[RS] || '';
+    merged[SEEN] = JSON.stringify(Array.from(new Set(parseSeenAs(base[SEEN]).concat(parseSeenAs(out[SEEN])))));
+    rows[iOld] = merged;
+    return { rows, action: 'updated' };
+  }
+  out[L] = ''; out[RS] = out[RS] || ''; out[SEEN] = out[SEEN] || '[]';
+  rows.push(out);
+  return { rows, action: 'added' };
+}
+
+/* ---------- outbox: writes reach the sheet in the background ---------- */
+// Connected-mode writes update the local list immediately (cacheMutate) and are
+// queued here, persisted in localStorage so they survive a reload/offline spell.
+// They're sent serially (batched when the deployed script supports `batch`),
+// retried with backoff, and re-applied on top of any refreshed sheet data.
+const OUTBOX_KEY = 'ordbok_outbox';
+let outbox = [];
+let outboxBusy = false, outboxPaused = false, outboxFails = 0, outboxLost = 0, outboxTimer = null;
+let batchUnsupported = false;
+const inflightOps = new Set();
+const pendingOps = () => outbox.filter(o => o.url === apiUrl);
+function persistOutbox() { store.set(OUTBOX_KEY, JSON.stringify(outbox)); renderSyncPill(); }
+function applyOpToRows(rows, op) {
+  const w = String(op.word || '').toLowerCase();
+  if (op.type === 'save') return applySaveToRows(rows, op.wire).rows;
+  if (op.type === 'learned') return rows.map(r => r[W].toLowerCase() === w ? Object.assign({}, r, { [L]: op.wire.learned ? 'Yes' : '' }) : r);
+  if (op.type === 'review') return rows.map(r => r[W].toLowerCase() === w ? Object.assign({}, r, { [RS]: op.wire.reviewState }) : r);
+  if (op.type === 'delete') return rows.filter(r => r[W].toLowerCase() !== w);
+  return rows;
+}
+function enqueueWrite(type, word, wire) {
+  const w = String(word || '').toLowerCase();
+  // Only the latest learned/review state per word matters; drop older queued ones.
+  if (type === 'learned' || type === 'review') {
+    outbox = outbox.filter(o => !(o.type === type && o.word === w && o.url === apiUrl && !inflightOps.has(o.id)));
+  }
+  outbox.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), url: apiUrl, type, word: w, wire, tries: 0 });
+  persistOutbox();
+  flushOutbox();
+}
+function classifyWriteError(e) {
+  const msg = (e && e.message) || '';
+  if (/pin/i.test(msg)) return { ok: false, pause: true };
+  if (/not found/i.test(msg)) return { ok: true };                 // word already gone: nothing left to sync
+  if (e instanceof TypeError || /failed to fetch|networkerror|load failed|network request/i.test(msg)) return { ok: false, network: true };
+  return { ok: false };
+}
+async function sendOpChunk(chunk) {
+  if (chunk.length > 1 && !batchUnsupported) {
+    try {
+      const data = await post({ action: 'batch', ops: chunk.map(o => o.wire) });
+      if (Array.isArray(data.results)) return data.results.map(r => r && r.ok ? { ok: true } : classifyWriteError(new Error((r && r.error) || 'failed')));
+    } catch (e) {
+      if (/swedish word is required|unknown action/i.test(e.message || '')) batchUnsupported = true;   // older script: send one at a time
+      else return [classifyWriteError(e)];
+    }
+  }
+  const out = [];
+  for (const o of chunk) {
+    try { await post(o.wire); out.push({ ok: true }); }
+    catch (e) { out.push(classifyWriteError(e)); break; }
+  }
+  return out;
+}
+async function flushOutbox() {
+  if (!apiUrl || outboxBusy || outboxPaused) return;
+  if (!pendingOps().length) { renderSyncPill(); return; }
+  if (navigator.onLine === false) { renderSyncPill(); return; }
+  outboxBusy = true; clearTimeout(outboxTimer); renderSyncPill();
+  try {
+    while (pendingOps().length) {
+      const chunk = pendingOps().slice(0, 25);
+      chunk.forEach(o => inflightOps.add(o.id));
+      let results;
+      try { results = await sendOpChunk(chunk); } finally { chunk.forEach(o => inflightOps.delete(o.id)); }
+      let stalled = false;
+      for (let i = 0; i < chunk.length; i++) {
+        const r = results[i];
+        if (!r) { stalled = true; break; }
+        if (r.ok) { outbox = outbox.filter(o => o.id !== chunk[i].id); outboxFails = 0; continue; }
+        stalled = true;
+        if (r.pause) { outboxPaused = true; break; }
+        chunk[i].tries = (chunk[i].tries || 0) + 1;
+        if (!r.network && chunk[i].tries >= 3) { outbox = outbox.filter(o => o.id !== chunk[i].id); outboxLost++; stalled = false; continue; }   // the sheet keeps rejecting it: don't block the rest
+        outboxFails++;
+        break;
+      }
+      writeEpoch++;
+      persistOutbox();
+      if (stalled) {
+        if (!outboxPaused) outboxTimer = setTimeout(flushOutbox, Math.min(60000, 3000 * Math.pow(2, Math.max(0, outboxFails - 1))));
+        break;
+      }
+    }
+  } finally { outboxBusy = false; renderSyncPill(); }
+}
+function renderSyncPill() {
+  const p = $('syncPill'); if (!p) return;
+  const n = pendingOps().length;
+  if (!apiUrl || (!n && !outboxLost)) { p.hidden = true; return; }
+  p.hidden = false;
+  const stalled = outboxPaused || outboxFails > 0 || navigator.onLine === false;
+  p.classList.toggle('warn', stalled || !!outboxLost);
+  p.textContent = n ? (stalled ? n + ' unsynced · Retry' : 'Syncing…') : 'A change couldn’t be saved';
+  p.title = stalled ? 'Changes are saved on this device and will be sent to your sheet. Tap to retry now.' : '';
+}
+
 async function apiSave(row) {
   row[W] = row[W].toLowerCase();   // canonical, case-insensitive storage key
-  // Control metadata only — never a stored row field. Read it, then let the
-  // Demo-mode branch strip it before it touches localStorage; Connected mode
-  // still needs it on `row` a few lines down, to travel to the server as-is.
-  const previousWord = row.previousWord ? String(row.previousWord).trim().toLowerCase() : '';
   if (!apiUrl) {
-    delete row.previousWord;
-    const rows = localRows();
-    row[GF] = row[GF] || '[]';
-    let iNew = rows.findIndex(r => r[W].toLowerCase() === row[W].toLowerCase());
-    const iOld = (previousWord && previousWord !== row[W])
-      ? rows.findIndex(r => r[W].toLowerCase() === previousWord)
-      : -1;
-
-    if (iNew >= 0) {
-      let seen = parseSeenAs(rows[iNew][SEEN]).concat(parseSeenAs(row[SEEN]));
-      row[L] = rows[iNew][L] || '';
-      row[RS] = rows[iNew][RS] || '';
-      if (iOld >= 0 && iOld !== iNew) {
-        // True-duplicate cleanup: previousWord independently matches a
-        // DIFFERENT existing row (e.g. both "sakna" and "saknade" were
-        // already separately saved). Fold its history into the surviving
-        // new-word row, then drop it.
-        row[L] = row[L] || rows[iOld][L] || '';
-        row[RS] = row[RS] || rows[iOld][RS] || '';
-        seen = seen.concat(parseSeenAs(rows[iOld][SEEN]));
-        rows.splice(iOld, 1);
-        if (iOld < iNew) iNew -= 1;   // removed row shifts later indices down
-      }
-      row[SEEN] = JSON.stringify(Array.from(new Set(seen)));
-      rows[iNew] = row; saveLocalRows(rows); return 'updated';
-    }
-
-    if (iOld >= 0) {
-      // Bug-fix path: no row for the new word yet, but the row this one used
-      // to be saved as still exists — rename/overwrite it in place so
-      // Learned/Review State/Seen As survive, instead of inserting a fresh,
-      // history-less duplicate row.
-      row[L] = rows[iOld][L] || '';
-      row[RS] = rows[iOld][RS] || '';
-      row[SEEN] = JSON.stringify(Array.from(new Set(
-        parseSeenAs(rows[iOld][SEEN]).concat(parseSeenAs(row[SEEN]))
-      )));
-      rows[iOld] = row; saveLocalRows(rows); return 'updated';
-    }
-
-    // Genuinely new word — unchanged from before.
-    row[L] = ''; row[RS] = row[RS] || ''; row[SEEN] = row[SEEN] || '[]';
-    rows.push(row); saveLocalRows(rows); return 'added';
+    const { rows, action } = applySaveToRows(localRows(), row);
+    saveLocalRows(rows);
+    return action;
   }
-  const action = (await post(row)).action;   // row.previousWord (if set) travels to the server as-is
-  invalidateRowsCache();
+  // row.previousWord (if set) travels to the server as-is and drives the
+  // rename/merge there; applySaveToRows applies the same rules locally right now.
+  const wire = Object.assign({}, row);
+  let action = 'saved';
+  cacheMutate(rows => { const r = applySaveToRows(rows, wire); action = r.action; return r.rows; });
+  enqueueWrite('save', row[W], wire);
   return action;
 }
 async function apiSetLearned(word, val) {
@@ -982,8 +1162,9 @@ async function apiSetLearned(word, val) {
     if (r) { r[L] = val ? 'Yes' : ''; saveLocalRows(rows); }
     return;
   }
-  await post({ action: 'setLearned', word, learned: !!val });
-  invalidateRowsCache();
+  const wire = { action: 'setLearned', word, learned: !!val };
+  cacheMutate(rows => applyOpToRows(rows, { type: 'learned', word, wire }));
+  enqueueWrite('learned', word, wire);
 }
 async function apiUpdateReview(word, state) {
   const stateStr = JSON.stringify(state);
@@ -993,16 +1174,20 @@ async function apiUpdateReview(word, state) {
     if (r) { r[RS] = stateStr; saveLocalRows(rows); }
     return;
   }
-  await post({ action: 'updateReview', word, reviewState: stateStr });
-  invalidateRowsCache();
+  // In place (not a copy) so a Practice deck holding this row object stays current.
+  writeEpoch++;
+  const r = allRowsCache && allRowsCache.find(x => x[W].toLowerCase() === word.toLowerCase());
+  if (r) { r[RS] = stateStr; persistRowsCache(); }
+  enqueueWrite('review', word, { action: 'updateReview', word, reviewState: stateStr });
 }
 async function apiDelete(word) {
   if (!apiUrl) {
     saveLocalRows(localRows().filter(x => x[W].toLowerCase() !== word.toLowerCase()));
     return;
   }
-  await post({ action: 'delete', word });
-  invalidateRowsCache();
+  const wire = { action: 'delete', word };
+  cacheMutate(rows => applyOpToRows(rows, { type: 'delete', word, wire }));
+  enqueueWrite('delete', word, wire);
 }
 // Flag / unflag a word as possibly wrong by adding/removing the FLAG_TAG tag —
 // Tags stays plain comma-separated text, so no new column is needed.
@@ -1269,8 +1454,7 @@ async function saveSearchResult() {
     const b = $('sBadge'); b.innerHTML = 'Saved to ' + esc(whereLabel()) + ' ' + ICON_TICK; b.className = 'badge saved';
     setSMsg('');
     // The card now shows a saved row: offer Edit/Flag/Remove on it.
-    const rows = await fetchAllRows(false);
-    const saved = rows.find(r => r[W].toLowerCase() === row[W].toLowerCase());
+    const saved = ((apiUrl ? allRowsCache : localRows()) || []).find(r => r[W].toLowerCase() === row[W].toLowerCase());
     if (saved) {
       cardRow = saved;
       ['sEdit', 'sFlag', 'sRemove'].forEach(id => $(id).hidden = false);
@@ -1380,11 +1564,36 @@ function updateTagFilterOptions(allRows) {
   });
 }
 
+// A closed entry renders only its summary; the body (forms table, examples,
+// tools) is built on first open — see the toggle handler. Only the first
+// listLimit matches are in the DOM, which keeps typing snappy at 1000 words.
+const LIST_PAGE = 60;
+let listLimit = LIST_PAGE;
+let shownRows = new Map();
+let lastListSig = '';
+let runSeq = 0;
+function entryDetailHtml(r) {
+  return `${entryBodyHtml(r)}
+          <div class="tools">
+            <button class="link" data-say="${esc(r[W])}">${ICON_SPEAKER} Listen</button>
+            <button class="link" data-learn="${esc(r[W])}" data-val="${isLearned(r) ? '0' : '1'}">${isLearned(r) ? ICON_UNDO + ' Mark as not learned' : ICON_CHECK + ' Mark as learned'}</button>
+            <button class="link" data-edit="${esc(r[W])}">Edit</button>
+            <button class="link" data-regen="${esc(r[W])}">Regenerate</button>
+            <button class="link" data-flag="${esc(r[W])}">${isFlagged(r) ? 'Unflag' : 'Flag as wrong'}</button>
+            <button class="link danger-link" data-remove="${esc(r[W])}">Remove</button>
+          </div>`;
+}
 async function runSearch(autoOpenSingle) {
   const q = $('q').value.trim();
   const box = $('results'), count = $('count');
+  const seq = ++runSeq;
+  // A new query/filter/sort starts back at the first page; a re-render after an
+  // edit (same signature) keeps however many the user had expanded.
+  const sig = [q, filterMode, tagFilterValue, sortMode].join('\u0001');
+  if (sig !== lastListSig) { listLimit = LIST_PAGE; lastListSig = sig; }
   try {
     let rows = await apiSearch(q);
+    if (seq !== runSeq) return;   // a newer keystroke/filter already took over
     if (!q) {
       const today = todayStr(), weekAgo = daysAgoStr(7);
       let dueToday = 0, reviewedThisWeek = 0, knownWell = 0;
@@ -1405,6 +1614,7 @@ async function runSearch(autoOpenSingle) {
     rows = sortMode === 'az'
       ? rows.slice().sort((a, b) => a[W].localeCompare(b[W], 'sv'))
       : rows.slice().reverse();                 // sheet is oldest-first
+    if (flashWord) { const fi = rows.findIndex(r => keyOf(r) === flashWord); if (fi >= listLimit) listLimit = fi + 1; }
     if (autoOpenSingle && q && rows.length === 1) openSet.add(keyOf(rows[0]));
     shownKeys = rows.map(keyOf);
 
@@ -1421,7 +1631,9 @@ async function runSearch(autoOpenSingle) {
         : 'Your list is empty. Use the Search tab to look up and save your first word.') + '</div>';
       return;
     }
-    box.innerHTML = '<div class="list">' + rows.map(r => `
+    shownRows = new Map(rows.map(r => [keyOf(r), r]));
+    const visible = rows.slice(0, listLimit);
+    box.innerHTML = '<div class="list">' + visible.map(r => `
       <details class="entry${flashWord && keyOf(r) === flashWord ? ' flash' : ''}" data-key="${esc(keyOf(r))}" data-pos="${posClass(r[POS])}"${openSet.has(keyOf(r)) ? ' open' : ''}>
         <summary>
           <span class="dot${isLearned(r) ? ' learned' : ''}" role="img" aria-label="${isLearned(r) ? 'Learned' : 'Learning'}" title="${isLearned(r) ? 'Learned' : 'Learning'}"></span>
@@ -1429,18 +1641,9 @@ async function runSearch(autoOpenSingle) {
           <span class="gloss">${hl(r[EN], q)}</span>
           <span class="meta">${posChipHtml(r)}</span>
         </summary>
-        <div class="detail">
-          ${entryBodyHtml(r)}
-          <div class="tools">
-            <button class="link" data-say="${esc(r[W])}">${ICON_SPEAKER} Listen</button>
-            <button class="link" data-learn="${esc(r[W])}" data-val="${isLearned(r) ? '0' : '1'}">${isLearned(r) ? ICON_UNDO + ' Mark as not learned' : ICON_CHECK + ' Mark as learned'}</button>
-            <button class="link" data-edit="${esc(r[W])}">Edit</button>
-            <button class="link" data-regen="${esc(r[W])}">Regenerate</button>
-            <button class="link" data-flag="${esc(r[W])}">${isFlagged(r) ? 'Unflag' : 'Flag as wrong'}</button>
-            <button class="link danger-link" data-remove="${esc(r[W])}">Remove</button>
-          </div>
-        </div>
-      </details>`).join('') + '</div>';
+        <div class="detail"${openSet.has(keyOf(r)) ? '>' + entryDetailHtml(r) : ' data-lazy>'}</div>
+      </details>`).join('') + '</div>' +
+      (rows.length > visible.length ? `<button class="link" type="button" id="showMore" style="margin:12px auto;display:block">Show ${Math.min(LIST_PAGE, rows.length - visible.length)} more (${rows.length - visible.length} hidden)</button>` : '');
     flashWord = null;
   } catch (e) {
     count.textContent = '';
@@ -1579,8 +1782,12 @@ function daysAgoStr(n) { const d = new Date(); d.setDate(d.getDate() - n); retur
 // A never-reviewed row (new, or an older row saved before this feature
 // existed) is due today; a legacy "Learned=Yes" row gets a one-time re-prime
 // (reps=2) the first time the scheduler touches it, rather than a precise migration.
+const rsMemo = new WeakMap();   // row -> { raw, state }: parse Review State once per value, not per call
 function reviewState(r) {
-  const s = parseReviewState(r[RS]);
+  const m = rsMemo.get(r);
+  let s;
+  if (m && m.raw === r[RS]) s = m.state;
+  else { s = parseReviewState(r[RS]); rsMemo.set(r, { raw: r[RS], state: s }); }
   if (Object.keys(s).length) return s;
   return { ef: 2.5, interval: 0, reps: isLearned(r) ? 2 : 0, due: todayStr(), last: '' };
 }
@@ -2619,7 +2826,6 @@ async function applyCheck() {
   btn.disabled = false;
   btn.hidden = !document.querySelector('#checkList input:not(:disabled)');
   $('checkStatus').textContent = ok + ' fixed.' + (fail ? ' ' + fail + ' failed — you can Apply again.' : '');
-  invalidateRowsCache();
   if (!$('wordsView').hidden) runSearch();
 }
 
@@ -2688,7 +2894,7 @@ document.querySelectorAll('.chars').forEach(box => box.addEventListener('click',
 }));
 
 // ---- Words page ----
-let t; $('q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => runSearch(true), 80); });
+let t; $('q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => runSearch(true), 120); });
 $('sort').value = sortMode;
 $('sort').addEventListener('change', () => { sortMode = $('sort').value; store.set('ordbok_sort', sortMode); runSearch(); });
 $('filterSeg').addEventListener('click', e => {
@@ -2703,10 +2909,15 @@ $('toggleAll').addEventListener('click', () => {
   shownKeys.forEach(k => allOpen ? openSet.delete(k) : openSet.add(k));
   runSearch();
 });
+$('results').addEventListener('click', e => {
+  if (e.target.id === 'showMore') { listLimit += LIST_PAGE; runSearch(); }
+});
 // remember which rows are open (toggle does not bubble, so listen in the capture phase)
 $('results').addEventListener('toggle', e => {
   const k = e.target.dataset && e.target.dataset.key; if (!k) return;
   e.target.open ? openSet.add(k) : openSet.delete(k);
+  const body = e.target.open && e.target.querySelector('.detail[data-lazy]');
+  if (body && shownRows.has(k)) { body.innerHTML = entryDetailHtml(shownRows.get(k)); body.removeAttribute('data-lazy'); }
   updateToggleAll();
 }, true);
 
@@ -2840,20 +3051,36 @@ document.addEventListener('keydown', e => {
 $('settingsMenuBtn').addEventListener('click', () => { $('apiUrl').value = apiUrl; $('settings').showModal(); });
 $('cancelSettings').addEventListener('click', () => $('settings').close());
 $('saveSettings').addEventListener('click', () => {
-  apiUrl = $('apiUrl').value.trim(); store.set('ordbok_api_url', apiUrl);
-  invalidateRowsCache();
-  $('settings').close(); renderModePill(); refreshCurrentView();
+  const newUrl = $('apiUrl').value.trim();
+  if (newUrl !== apiUrl) { apiUrl = newUrl; store.set('ordbok_api_url', apiUrl); invalidateRowsCache(); hydrateRowsCache(); batchUnsupported = false; outboxPaused = false; }
+  $('settings').close(); renderModePill(); renderSyncPill(); refreshCurrentView(); flushOutbox();
 });
 $('openPinFromSettings').addEventListener('click', async () => {
   const entered = await askPin();
   if (entered != null) { appPin = entered; store.set('ordbok_pin', appPin); renderModePill(); }
 });
 
+outbox = safeJson(store.get(OUTBOX_KEY, ''), []);
+if (!Array.isArray(outbox)) outbox = [];
+hydrateRowsCache();
 renderModePill();
+renderSyncPill();
 renderThemeBtn();
+$('syncPill').addEventListener('click', () => { outboxPaused = false; outboxFails = 0; outboxLost = 0; flushOutbox(); });
+window.addEventListener('online', () => { renderSyncPill(); flushOutbox(); });
+window.addEventListener('offline', renderSyncPill);
+// Back on the tab (e.g. after editing the sheet by hand): flush anything waiting
+// and pick up outside changes in the background.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  flushOutbox();
+  refreshRowsInBackground(30000);
+});
 // A #read/... deep link (shared/bookmarked/refreshed) opens straight into
 // the Read tab at that screen instead of the usual Search default.
 setView(location.hash.startsWith('#read') ? 'reading' : 'search');
+refreshRowsInBackground(0);   // fire-and-forget: instant from the local copy, then catch up with the sheet
+flushOutbox();
 migratePassagesIfNeeded();   // fire-and-forget; see its own comment above
 </script>
 </body>
