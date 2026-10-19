@@ -72,13 +72,13 @@ const PASSAGES_CACHE_KEY = 'passages_v1';
 const PROVIDER = 'openai';                       // 'openai' or 'gemini'
 const OPENAI_MODEL = 'gpt-5.4-mini';
 const GEMINI_MODEL = 'gemini-3.5-flash-lite';
-const POS_OPTIONS = ['noun (en)', 'noun (ett)', 'verb', 'adjective', 'adverb', 'pronoun',
+const POS_OPTIONS = ['noun (en)', 'noun (ett)', 'noun (en/ett)', 'noun (plural)', 'verb', 'adjective', 'adverb', 'pronoun',
   'preposition', 'conjunction', 'interjection', 'numeral', 'phrase'];
 
 // Hard cap on generated tokens. Keeps every auto-fill call short (fields are
 // meant to be quick reference notes, not essays) and cuts response time a lot,
 // since latency scales mostly with how many tokens the model has to generate.
-const AUTOFILL_MAX_TOKENS = 550;   // room for 5 adjective forms + Recognised/Suggestion/Verdict keys
+const AUTOFILL_MAX_TOKENS = 600;   // room for 5 adjective forms + Recognised/Suggestion/Verdict/Gender keys
 
 // Same rationale as AUTOFILL_MAX_TOKENS, sized for a 100-150 word Swedish
 // passage plus the wordsUsed array and JSON overhead.
@@ -140,7 +140,10 @@ function autofill_(word, sourceSentence, savedEntry) {
     'lemma (e.g. "gå", "bil", "snabb");\n' +
     '"Pronunciation Guide": an English-friendly respelling of the dictionary form, all lowercase, syllables separated by hyphens, ' +
     'with the stress mark "ˈ" directly before the stressed syllable — never capital letters — e.g. "hem-ˈtrev-lig", "ˈtyst";\n' +
-    '"Part of Speech": one of ' + JSON.stringify(POS_OPTIONS) + ' (use "noun (en)" or "noun (ett)" to show the gender; pick the most common use);\n' +
+    '"Part of Speech": one of ' + JSON.stringify(POS_OPTIONS) + ' (for a noun use "noun (en)", "noun (ett)", "noun (en/ett)" or "noun (plural)" to match "Gender" below; pick the most common use);\n' +
+    '"Gender": for a noun, exactly one of "en", "ett", "en/ett" (only if both genders are genuinely in common use, e.g. "parti") ' +
+    'or "plural" (only if the noun is used only in the plural, e.g. "kläder"); "" for every non-noun. Decide it from the ' +
+    'singular definite form (bil → bilen = "en", hus → huset = "ett") and keep it consistent with "Forms";\n' +
     '"English Meaning": a short translation of the dictionary form, 6 words or fewer, ALWAYS lowercase (except proper nouns); ' +
     'nouns in the singular ("sandwich", not "sandwiches"); verbs in the plain form and NOT prefixed with "to" ' +
     '(write "take", not "to take" or "took") (most common sense; a second sense only if truly common, comma-separated);\n' +
@@ -163,7 +166,7 @@ function autofill_(word, sourceSentence, savedEntry) {
       ? '\nThe learner also sends an entry they SAVED earlier for this word. Compare it with your own answer and add two keys: ' +
         '"Verdict": "fix" only if the saved entry has a real error — headword is not the dictionary form, a misspelling, ' +
         'the meaning/part of speech is wrong or belongs to a different form, the example uses the word wrongly, or forms are ' +
-        'missing or wrong — otherwise "ok" (ignore harmless wording differences, synonyms and pronunciation style); ' +
+        'missing or wrong, or a noun\'s gender (en/ett) is missing or wrong — otherwise "ok" (ignore harmless wording differences, synonyms and pronunciation style); ' +
         '"Issues": one short sentence naming the errors when "fix", else "".'
       : '');
 
@@ -222,6 +225,13 @@ function autofill_(word, sourceSentence, savedEntry) {
     fields['Grammar Forms'] = '[]';
   }
   delete fields.Forms;
+  // Gender is only a hint for the Part of Speech value ("noun (en)" etc.) — it
+  // has no sheet column, so fold it into POS and drop it.
+  const gender = String(fields.Gender || '').toLowerCase().trim();
+  if (/^noun/i.test(String(fields['Part of Speech'] || '')) && ['en', 'ett', 'en/ett', 'plural'].indexOf(gender) !== -1) {
+    fields['Part of Speech'] = 'noun (' + gender + ')';
+  }
+  delete fields.Gender;
   return { ok: true, fields: fields };
 }
 

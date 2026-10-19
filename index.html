@@ -114,6 +114,10 @@ applyTheme(store.get('ordbok_theme', ''));
   [data-pos="adv"] .pos { color: var(--c-adv); }
   .gender[data-g="en"] { color: var(--c-en); }
   .gender[data-g="ett"] { color: var(--c-ett); }
+  /* en/ett shown right before a noun headword ("en bil"); not part of the word itself */
+  .gender-pre { font: 600 .72em/1 var(--sans); margin-right: .45em; color: var(--muted); user-select: none; }
+  .gender-pre[data-g="en"] { color: var(--c-en); }
+  .gender-pre[data-g="ett"] { color: var(--c-ett); }
   .tag-chip { color: var(--muted); border-color: var(--line); background: var(--bg); font-weight: 500; }
   .badge { margin-bottom: 8px; }
   .badge.ok { color: var(--ok); }
@@ -587,7 +591,7 @@ applyTheme(store.get('ordbok_theme', ''));
     <label for="f_pos">Part of speech</label>
     <select id="f_pos">
       <option value="">Choose…</option>
-      <option>noun (en)</option><option>noun (ett)</option><option>verb</option>
+      <option>noun (en)</option><option>noun (ett)</option><option>noun (en/ett)</option><option>noun (plural)</option><option>verb</option>
       <option>adjective</option><option>adverb</option><option>pronoun</option>
       <option>preposition</option><option>conjunction</option><option>interjection</option>
       <option>numeral</option><option>phrase</option>
@@ -618,6 +622,7 @@ applyTheme(store.get('ordbok_theme', ''));
     <div class="seg" role="group" aria-label="Which words">
       <button type="button" data-scope="flagged" aria-pressed="true">Flagged only</button>
       <button type="button" data-scope="all" aria-pressed="false">All words</button>
+      <button type="button" data-scope="gender" aria-pressed="false">Missing en/ett</button>
     </div>
     <p class="msg" id="checkScopeNote"></p>
   </div>
@@ -1021,9 +1026,17 @@ function posClass(pos) {
 function posChipHtml(r) {
   const pos = r[POS] || '';
   if (!pos) return '';
-  const g = genderOf(pos);
+  const g = nounGender(pos);
   return `<span class="pos">${esc(g ? g + ' noun' : pos)}</span>`;
 }
+// Gender word shown before a noun headword: "en" / "ett" / "en/ett", or '' for
+// plural-only nouns and every non-noun (they have no en/ett to show).
+function genderPrefixHtml(r) {
+  const g = nounGender(r[POS]);
+  return (g && g !== 'plural') ? `<span class="gender-pre" data-g="${g}">${g}</span>` : '';
+}
+// Headword with its en/ett prefix; q (optional) highlights the search match in the bare word.
+function svWordHtml(r, q) { return genderPrefixHtml(r) + (q ? hl(r[W], q) : esc(r[W])); }
 // "noun (en)" / "noun (ett)" -> 'en' / 'ett' / null. Used both for the gender
 // drill and to colour-code en/ett consistently wherever POS is shown.
 function genderOf(pos) {
@@ -1031,6 +1044,12 @@ function genderOf(pos) {
   if (p.includes('(en)')) return 'en';
   if (p.includes('(ett)')) return 'ett';
   return null;
+}
+// Full noun-gender reading of a POS string: 'en' | 'ett' | 'en/ett' | 'plural' | null.
+// (genderOf above stays en/ett only — the En-or-ett drill must skip dual/plural nouns.)
+function nounGender(pos) {
+  const m = /^noun \((en|ett|en\/ett|plural)\)$/.exec((pos || '').trim().toLowerCase());
+  return m ? m[1] : null;
 }
 // Shared safe-JSON-parse pattern for every JSON-in-a-cell field (Grammar
 // Forms, Seen As, Review State) — never throws, falls back on malformed data.
@@ -1122,7 +1141,7 @@ function showSearchCard(r, badge, note, kind) {
   $('sResult').innerHTML = `
     <span class="badge ${badge.kind}" id="sBadge">${esc(badge.label)}</span>
     <div class="rc-head">
-      <span class="sv" lang="sv">${esc(r[W])}</span>
+      <span class="sv" lang="sv">${svWordHtml(r)}</span>
       <button class="link" type="button" data-say="${esc(r[W])}" aria-label="Listen">${ICON_SPEAKER} Listen</button>
     </div>
     <div class="meta">${posChipHtml(r)}</div>
@@ -1384,7 +1403,7 @@ async function runSearch(autoOpenSingle) {
       <details class="entry${flashWord && keyOf(r) === flashWord ? ' flash' : ''}" data-key="${esc(keyOf(r))}" data-pos="${posClass(r[POS])}"${openSet.has(keyOf(r)) ? ' open' : ''}>
         <summary>
           <span class="dot${isLearned(r) ? ' learned' : ''}" role="img" aria-label="${isLearned(r) ? 'Learned' : 'Learning'}" title="${isLearned(r) ? 'Learned' : 'Learning'}"></span>
-          <span class="sv" lang="sv">${hl(r[W], q)}</span>
+          <span class="sv" lang="sv">${svWordHtml(r, q)}</span>
           <span class="gloss">${hl(r[EN], q)}</span>
           <span class="meta">${posChipHtml(r)}</span>
         </summary>
@@ -2062,7 +2081,7 @@ async function openWordPanel(word, pidx, btnEl) {
   try { const rows = await fetchAllRows(false); row = findExistingRow(rows, word); } catch (e) { /* fall through to "not in your words" */ }
   const closeBtn = '<button type="button" class="rd-panel-close" data-action="close-panel" aria-label="Close word details">✕</button>';
   if (row) {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(row[W]) + '</div>' + posChipHtml(row) + entryBodyHtml(row) +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + svWordHtml(row) + '</div>' + posChipHtml(row) + entryBodyHtml(row) +
       '<div class="rd-panel-grade">' +
       '<button type="button" data-action="grade" data-knew="0" data-word="' + esc(word) + '">Still learning</button>' +
       '<button type="button" data-action="grade" data-knew="1" data-word="' + esc(word) + '">I know it</button>' +
@@ -2315,8 +2334,8 @@ function renderCard() {
     const formsHtml = formsTableHtml(parseForms(r[GF]));
     const forms = formsHtml ? `<div class="forms">${formsHtml}</div>` : '';
     inner = sv
-      ? `<div class="big" lang="sv">${esc(r[W])}</div><div class="ipa">${esc(r[PR])}</div><div class="ans">${esc(r[EN])}</div>${ex}${forms}`
-      : `<div class="big en">${esc(r[EN])}</div><div class="big" lang="sv" style="margin-top:8px">${esc(r[W])}</div><div class="ipa">${esc(r[PR])}</div>${listen}${ex}${forms}`;
+      ? `<div class="big" lang="sv">${svWordHtml(r)}</div><div class="ipa">${esc(r[PR])}</div><div class="ans">${esc(r[EN])}</div>${ex}${forms}`
+      : `<div class="big en">${esc(r[EN])}</div><div class="big" lang="sv" style="margin-top:8px">${svWordHtml(r)}</div><div class="ipa">${esc(r[PR])}</div>${listen}${ex}${forms}`;
   }
   wrap.innerHTML = `<div class="pcard${P.flipped ? ' flipped' : ''}" id="card" tabindex="0" role="button" aria-label="${P.flipped ? 'Card answer' : 'Show answer'}">${inner}</div>`;
 }
@@ -2399,7 +2418,10 @@ function renderThemeBtn() {
 // previousWord rename/merge keeps Learned, Review State and Seen As.
 const CHECK_CONCURRENCY = 3;
 const CK = { scope: 'flagged', running: false, stop: false, results: [] };
-const checkTargets = rows => CK.scope === 'flagged' ? rows.filter(isFlagged) : rows;
+const checkTargets = rows => CK.scope === 'flagged' ? rows.filter(isFlagged)
+  : CK.scope === 'gender' ? rows.filter(r => (r[POS] || '').trim().toLowerCase() === 'noun')   // nouns saved without en/ett
+  : rows;
+const GENDER_POS_RE = /^noun \((en|ett|en\/ett|plural)\)$/;
 async function openCheck() {
   CK.results = []; CK.stop = false;
   $('checkList').innerHTML = '';
@@ -2413,8 +2435,9 @@ async function updateCheckScope() {
   let n = 0;
   try { n = checkTargets(await fetchAllRows(false)).length; } catch (e) { /* shown as 0 */ }
   $('checkScopeNote').textContent = n
-    ? n + ' word' + (n === 1 ? '' : 's') + ' to check — one AI call each.'
-    : CK.scope === 'flagged' ? 'No flagged words. Flag entries that look wrong, or check all words.' : 'No words to check yet.';
+    ? n + ' word' + (n === 1 ? '' : 's') + (CK.scope === 'gender' ? ' without en/ett — one AI call each; only the part of speech changes.' : ' to check — one AI call each.')
+    : CK.scope === 'flagged' ? 'No flagged words. Flag entries that look wrong, or check all words.'
+    : CK.scope === 'gender' ? 'No nouns are missing en/ett.' : 'No words to check yet.';
   $('checkStart').disabled = !n;
 }
 // What the model compares its own answer against.
@@ -2443,7 +2466,10 @@ function buildFixedRow(old, f) {
 function renderCheckItem(i) {
   const res = CK.results[i], o = res.old, f = res.f;
   let body, checked = true;
-  if (res.bad) {
+  if (res.gender) {
+    body = `<div class="ch-words"><span class="sv" lang="sv">${esc(o[W])}</span>: ${esc(o[EN])}</div>` +
+      `<div class="ch-issue">noun → <b>${esc(res.gender.replace(/^noun \(|\)$/g, ''))}</b></div>`;
+  } else if (res.bad) {
     const sug = String(f.Suggestion || '').trim();
     body = `<div class="ch-words"><span class="sv ch-old" lang="sv">${esc(o[W])}</span> isn’t recognised as Swedish.</div>` +
       `<div class="ch-issue">${sug ? 'Fix: replace with <b lang="sv">' + esc(sug) + '</b> (looked up again when applied).' : 'Fix: remove this word.'}</div>`;
@@ -2478,6 +2504,16 @@ async function runCheck() {
     while (!CK.stop && next < targets.length) {
       const r = targets[next++];
       try {
+        if (CK.scope === 'gender') {
+          const data = await post({ action: 'autofill', word: r[W], sourceSentence: r[XS] || '' });
+          const pos = String((data.fields || {})[POS] || '').trim().toLowerCase();
+          if (!CK.stop && GENDER_POS_RE.test(pos)) {
+            CK.results.push({ old: r, f: {}, gender: pos });
+            renderCheckItem(CK.results.length - 1);
+          }
+          done++; if (!CK.stop) update();
+          continue;
+        }
         const data = await post({ action: 'autofill', word: r[W], sourceSentence: r[SRC] || '', savedEntry: savedEntryOf(r) });
         const f = data.fields || {};
         const bad = notRecognised(f);
@@ -2495,7 +2531,7 @@ async function runCheck() {
   $('checkStop').hidden = true;
   $('checkBar').style.width = '100%';
   $('checkStatus').textContent = (CK.stop ? 'Stopped after ' + done + ' of ' + targets.length + '. ' : 'Checked ' + done + ' words. ') +
-    (CK.results.length ? CK.results.length + ' look wrong — untick any you want to keep, then Apply.' : 'Everything looks fine.') +
+    (CK.results.length ? CK.results.length + (CK.scope === 'gender' ? ' can be filled in' : ' look wrong') + ' — untick any you want to keep, then Apply.' : CK.scope === 'gender' ? 'No en/ett found to add.' : 'Everything looks fine.') +
     (failed ? ' ' + failed + ' could not be checked (try again later).' : '');
   $('checkApply').hidden = !CK.results.length;
 }
@@ -2508,7 +2544,12 @@ async function applyCheck() {
     const res = CK.results[+box.dataset.i];
     $('checkStatus').textContent = 'Applying ' + (ok + fail + 1) + ' of ' + boxes.length + '…';
     try {
-      if (res.bad) {
+      if (res.gender) {
+        // Only the part of speech changes; drop Learned/Review State so a stale copy can't overwrite newer progress.
+        const row = Object.assign({}, res.old, { [POS]: res.gender });
+        delete row[L]; delete row[RS];
+        await apiSave(row);
+      } else if (res.bad) {
         const sug = String(res.f.Suggestion || '').trim();
         if (!sug) await apiDelete(res.old[W]);
         else {
