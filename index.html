@@ -191,6 +191,10 @@ applyTheme(store.get('ordbok_theme', ''));
   .entry p.ex .e { color: var(--muted); font-size: 15px; display: block; }
   .entry .seen { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
   .entry .tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+  .rel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 16px 0 0; }
+  .rel h3 { font: 600 13px var(--sans); margin: 0 4px 0 0; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .rel-chip { font: 500 16px var(--serif); color: var(--lake); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 0 14px; min-height: 44px; cursor: pointer; }
+  .rel-chip:hover { border-color: var(--lake); }
   .forms { margin-top: 16px; }
   .entry .forms { padding-top: 16px; border-top: 1px solid var(--line); }
   .forms h3 { font: 600 13px var(--sans); margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -216,6 +220,7 @@ applyTheme(store.get('ordbok_theme', ''));
   .seg { display: inline-flex; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 3px; gap: 2px; }
   .seg button { min-height: 36px; padding: 4px 14px; border: 0; border-radius: 9px; background: none; color: var(--muted); font-weight: 600; font-size: 14px; }
   .seg button[aria-pressed="true"] { background: var(--lake); color: var(--on-lake); }
+  #checkSetup .seg { flex-wrap: wrap; }   /* four scopes don't fit one row at phone width */
   .list { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
   details.entry { border-bottom: 1px solid var(--line); border-left: 3px solid transparent; }
   details.entry:last-child { border-bottom: 0; }
@@ -604,6 +609,10 @@ applyTheme(store.get('ordbok_theme', ''));
     <textarea id="f_exen"></textarea>
     <label for="f_tags">Tags <small>(comma-separated, e.g. food, home)</small></label>
     <input id="f_tags" autocomplete="off">
+    <label for="f_syn">Synonyms <small>(comma-separated Swedish words)</small></label>
+    <input id="f_syn" autocomplete="off" lang="sv">
+    <label for="f_ant">Antonyms / motsatser <small>(comma-separated Swedish words)</small></label>
+    <input id="f_ant" autocomplete="off" lang="sv">
 
     <div class="forms" id="formsPreview" hidden></div>
   </div>
@@ -623,6 +632,7 @@ applyTheme(store.get('ordbok_theme', ''));
       <button type="button" data-scope="flagged" aria-pressed="true">Flagged only</button>
       <button type="button" data-scope="all" aria-pressed="false">All words</button>
       <button type="button" data-scope="gender" aria-pressed="false">Missing en/ett</button>
+      <button type="button" data-scope="related" aria-pressed="false">Missing synonyms</button>
     </div>
     <p class="msg" id="checkScopeNote"></p>
   </div>
@@ -666,16 +676,17 @@ applyTheme(store.get('ordbok_theme', ''));
 
 <script>
 const $ = id => document.getElementById(id);
-const FORM_COLS = ['Swedish Word','Pronunciation Guide','Part of Speech','English Meaning','Example Sentence (Swedish)','Example Sentence (English)','Tags','Source'];
-const [W, PR, POS, EN, XS, XE, TAGS, SRC] = FORM_COLS;
+const FORM_COLS = ['Swedish Word','Pronunciation Guide','Part of Speech','English Meaning','Example Sentence (Swedish)','Example Sentence (English)','Tags','Source','Synonyms','Antonyms'];
+const [W, PR, POS, EN, XS, XE, TAGS, SRC, SYN, ANT] = FORM_COLS;
 // AI auto-fill only ever returns the first 6 fields (Tags/Source are user-entered,
-// never overwritten by the AI response — see autofill()).
+// never overwritten by the AI response — see autofill()). Synonyms/Antonyms are
+// also AI-filled but user-editable, so they're copied separately by relatedFromAi().
 const AI_FORM_COLS = FORM_COLS.slice(1, 6);
 const L = 'Learned';
 const GF = 'Grammar Forms';
 const SEEN = 'Seen As';
 const RS = 'Review State';   // not in FORM_COLS — never directly user-edited
-const FIELD_IDS = ['f_word','f_pron','f_pos','f_en','f_exsv','f_exen','f_tags','f_source'];
+const FIELD_IDS = ['f_word','f_pron','f_pos','f_en','f_exsv','f_exen','f_tags','f_source','f_syn','f_ant'];
 const ICON_SPEAKER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8a5 5 0 0 1 0 8"/></svg>';
 const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
 const ICON_UNDO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>';
@@ -1056,6 +1067,12 @@ function nounGender(pos) {
 function safeJson(raw, fallback) {
   try { return JSON.parse(raw || JSON.stringify(fallback)); } catch (e) { return fallback; }
 }
+function parseWordList(raw) { return parseTags(raw); }   // Synonyms/Antonyms: same plain comma-separated shape as Tags
+// Copies the AI's comma-separated Synonyms/Antonyms (see autofill_) onto a row.
+function relatedFromAi(row, f) {
+  row[SYN] = String((f && f.Synonyms) || '').trim();
+  row[ANT] = String((f && f.Antonyms) || '').trim();
+}
 function parseTags(raw) { return (raw || '').split(',').map(s => s.trim()).filter(Boolean); }
 function parseForms(raw) { const a = safeJson(raw, []); return Array.isArray(a) ? a : []; }
 function parseSeenAs(raw) { const a = safeJson(raw, []); return Array.isArray(a) ? a : []; }
@@ -1077,10 +1094,14 @@ function formsTableHtml(forms) {
 function entryBodyHtml(r) {
   const forms = formsTableHtml(parseForms(r[GF]));
   const seen = parseSeenAs(r[SEEN]), tags = parseTags(r[TAGS]);
+  const relRow = (label, list) => list.length
+    ? `<div class="rel"><h3>${label}</h3>${list.map(w => `<button type="button" class="rel-chip" data-rel="${esc(w)}" lang="sv">${esc(w)}</button>`).join('')}</div>` : '';
+  const related = relRow('Synonyms', parseWordList(r[SYN])) + relRow('Antonyms (motsatser)', parseWordList(r[ANT]));
   return `
     ${r[PR] ? `<div class="ipa">${esc(r[PR])}</div>` : ''}
     <p class="en">${esc(r[EN])}</p>
     ${(r[XS] || r[XE]) ? `<p class="ex"><span class="s" lang="sv">${esc(r[XS])}</span><span class="e">${esc(r[XE])}</span></p>` : ''}
+    ${related}
     ${forms ? `<div class="forms"><h3>Forms</h3>${forms}</div>` : ''}
     ${seen.length ? `<p class="seen">Seen as: ${esc(seen.join(', '))}</p>` : ''}
     ${tags.length ? `<div class="tags">${tags.map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}`;
@@ -1221,6 +1242,7 @@ async function lookupWord(word) {
     const row = {};
     FORM_COLS.forEach(c => row[c] = '');
     AI_FORM_COLS.forEach(c => row[c] = String(f[c] || '').trim());
+    relatedFromAi(row, f);
     row[W] = lemma;
     row[GF] = JSON.stringify(parseForms(f[GF]));
     if (isForm) row[SEEN] = JSON.stringify([q.toLowerCase()]);
@@ -1489,6 +1511,8 @@ async function autofill() {
       el.value = v;
       if (el.tagName === 'SELECT' && el.value !== v) el.value = '';
     });
+    $('f_syn').value = String((data.fields && data.fields.Synonyms) || '').trim();
+    $('f_ant').value = String((data.fields && data.fields.Antonyms) || '').trim();
     currentForms = parseForms(data.fields && data.fields[GF]);
     renderFormsPreview();
     // The AI normalises the headword to its dictionary form (e.g. "gick" -> "gå").
@@ -2133,6 +2157,7 @@ async function saveWordFromPanel(word, pidx) {
     const row = {};
     FORM_COLS.forEach(c => row[c] = '');
     AI_FORM_COLS.forEach(c => row[c] = String(f[c] || '').trim());
+    relatedFromAi(row, f);
     row[W] = finalLemma;
     row[GF] = JSON.stringify(parseForms(f[GF]));
     if (finalLemma.toLowerCase() !== word.toLowerCase()) row[SEEN] = JSON.stringify([word.toLowerCase()]);
@@ -2419,6 +2444,7 @@ function renderThemeBtn() {
 const CHECK_CONCURRENCY = 3;
 const CK = { scope: 'flagged', running: false, stop: false, results: [] };
 const checkTargets = rows => CK.scope === 'flagged' ? rows.filter(isFlagged)
+  : CK.scope === 'related' ? rows.filter(r => !(r[SYN] || '').trim() && !(r[ANT] || '').trim())   // no synonyms or antonyms yet
   : CK.scope === 'gender' ? rows.filter(r => (r[POS] || '').trim().toLowerCase() === 'noun')   // nouns saved without en/ett
   : rows;
 const GENDER_POS_RE = /^noun \((en|ett|en\/ett|plural)\)$/;
@@ -2435,9 +2461,11 @@ async function updateCheckScope() {
   let n = 0;
   try { n = checkTargets(await fetchAllRows(false)).length; } catch (e) { /* shown as 0 */ }
   $('checkScopeNote').textContent = n
-    ? n + ' word' + (n === 1 ? '' : 's') + (CK.scope === 'gender' ? ' without en/ett — one AI call each; only the part of speech changes.' : ' to check — one AI call each.')
+    ? n + ' word' + (n === 1 ? '' : 's') + (CK.scope === 'gender' ? ' without en/ett — one AI call each; only the part of speech changes.'
+      : CK.scope === 'related' ? ' without synonyms/antonyms — one AI call each; only those two fields change.' : ' to check — one AI call each.')
     : CK.scope === 'flagged' ? 'No flagged words. Flag entries that look wrong, or check all words.'
-    : CK.scope === 'gender' ? 'No nouns are missing en/ett.' : 'No words to check yet.';
+    : CK.scope === 'gender' ? 'No nouns are missing en/ett.'
+    : CK.scope === 'related' ? 'Every word already has synonyms or antonyms.' : 'No words to check yet.';
   $('checkStart').disabled = !n;
 }
 // What the model compares its own answer against.
@@ -2453,6 +2481,9 @@ function buildFixedRow(old, f) {
   const row = {};
   FORM_COLS.forEach(c => row[c] = old[c] || '');
   AI_FORM_COLS.forEach(c => { const v = String(f[c] || '').trim(); if (v) row[c] = v; });
+  // Synonyms/Antonyms may be hand-edited, so a fix only fills them in when the saved row had none.
+  if (!row[SYN]) row[SYN] = String(f.Synonyms || '').trim();
+  if (!row[ANT]) row[ANT] = String(f.Antonyms || '').trim();
   const lemma = String(f['Dictionary Form'] || '').trim() || old[W];
   row[W] = lemma;
   row[TAGS] = parseTags(old[TAGS]).filter(t => t !== FLAG_TAG).join(', ');
@@ -2466,7 +2497,11 @@ function buildFixedRow(old, f) {
 function renderCheckItem(i) {
   const res = CK.results[i], o = res.old, f = res.f;
   let body, checked = true;
-  if (res.gender) {
+  if (res.related) {
+    body = `<div class="ch-words"><span class="sv" lang="sv">${esc(o[W])}</span>: ${esc(o[EN])}</div>` +
+      `<div class="ch-issue">${res.related.syn ? 'Synonyms: <b lang="sv">' + esc(res.related.syn) + '</b>' : ''}${res.related.syn && res.related.ant ? '<br>' : ''}` +
+      `${res.related.ant ? 'Antonyms: <b lang="sv">' + esc(res.related.ant) + '</b>' : ''}</div>`;
+  } else if (res.gender) {
     body = `<div class="ch-words"><span class="sv" lang="sv">${esc(o[W])}</span>: ${esc(o[EN])}</div>` +
       `<div class="ch-issue">noun → <b>${esc(res.gender.replace(/^noun \(|\)$/g, ''))}</b></div>`;
   } else if (res.bad) {
@@ -2504,6 +2539,17 @@ async function runCheck() {
     while (!CK.stop && next < targets.length) {
       const r = targets[next++];
       try {
+        if (CK.scope === 'related') {
+          const data = await post({ action: 'autofill', word: r[W], sourceSentence: r[XS] || '' });
+          const f = data.fields || {};
+          const syn = String(f.Synonyms || '').trim(), ant = String(f.Antonyms || '').trim();
+          if (!CK.stop && !notRecognised(f) && (syn || ant)) {
+            CK.results.push({ old: r, f: {}, related: { syn, ant } });
+            renderCheckItem(CK.results.length - 1);
+          }
+          done++; if (!CK.stop) update();
+          continue;
+        }
         if (CK.scope === 'gender') {
           const data = await post({ action: 'autofill', word: r[W], sourceSentence: r[XS] || '' });
           const pos = String((data.fields || {})[POS] || '').trim().toLowerCase();
@@ -2531,7 +2577,7 @@ async function runCheck() {
   $('checkStop').hidden = true;
   $('checkBar').style.width = '100%';
   $('checkStatus').textContent = (CK.stop ? 'Stopped after ' + done + ' of ' + targets.length + '. ' : 'Checked ' + done + ' words. ') +
-    (CK.results.length ? CK.results.length + (CK.scope === 'gender' ? ' can be filled in' : ' look wrong') + ' — untick any you want to keep, then Apply.' : CK.scope === 'gender' ? 'No en/ett found to add.' : 'Everything looks fine.') +
+    (CK.results.length ? CK.results.length + (CK.scope === 'gender' || CK.scope === 'related' ? ' can be filled in' : ' look wrong') + ' — untick any you want to keep, then Apply.' : CK.scope === 'gender' ? 'No en/ett found to add.' : CK.scope === 'related' ? 'No synonyms or antonyms found to add.' : 'Everything looks fine.') +
     (failed ? ' ' + failed + ' could not be checked (try again later).' : '');
   $('checkApply').hidden = !CK.results.length;
 }
@@ -2544,7 +2590,12 @@ async function applyCheck() {
     const res = CK.results[+box.dataset.i];
     $('checkStatus').textContent = 'Applying ' + (ok + fail + 1) + ' of ' + boxes.length + '…';
     try {
-      if (res.gender) {
+      if (res.related) {
+        // Only Synonyms/Antonyms change; Learned/Review State dropped like the gender fill below.
+        const row = Object.assign({}, res.old, { [SYN]: res.related.syn, [ANT]: res.related.ant });
+        delete row[L]; delete row[RS];
+        await apiSave(row);
+      } else if (res.gender) {
         // Only the part of speech changes; drop Learned/Review State so a stale copy can't overwrite newer progress.
         const row = Object.assign({}, res.old, { [POS]: res.gender });
         delete row[L]; delete row[RS];
@@ -2613,6 +2664,12 @@ $('sSuggest').addEventListener('click', e => lookupWord(e.currentTarget.dataset.
 $('sRetry').addEventListener('click', () => lookupWord(lastQuery));
 $('sManual').addEventListener('click', () => openEditor(null, lastQuery));
 $('sConnect').addEventListener('click', () => $('settingsMenuBtn').click());
+// Synonym/antonym chips: inside the Read panel stay on the passage, elsewhere open the word in Search.
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-rel]'); if (!b) return;
+  if (b.closest('#rdPanel')) { openWordPanel(b.dataset.rel, -1); return; }
+  setView('search'); lookupWord(b.dataset.rel);
+});
 $('sAlso').addEventListener('click', e => { const b = e.target.closest('[data-lookup]'); if (b) lookupWord(b.dataset.lookup); });
 $('sResult').addEventListener('click', e => { const b = e.target.closest('[data-say]'); if (b) speak(b.dataset.say); });
 

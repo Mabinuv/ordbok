@@ -36,6 +36,8 @@ const HEADERS = [
   'Review State',       // JSON: {ef, interval, reps, due, last, lapses} — SM-2-lite spaced-repetition state
   'Tags',               // comma-separated, e.g. "food, home" — meant to be hand-edited in the Sheet too
   'Source',             // free text: where/how the word was encountered (also grounds the AI example sentence)
+  'Synonyms',           // comma-separated Swedish words, e.g. "stor, enorm" — hand-editable like Tags
+  'Antonyms',           // comma-separated Swedish words (motsatser), e.g. "liten"
 ];
 
 /**
@@ -78,7 +80,7 @@ const POS_OPTIONS = ['noun (en)', 'noun (ett)', 'noun (en/ett)', 'noun (plural)'
 // Hard cap on generated tokens. Keeps every auto-fill call short (fields are
 // meant to be quick reference notes, not essays) and cuts response time a lot,
 // since latency scales mostly with how many tokens the model has to generate.
-const AUTOFILL_MAX_TOKENS = 600;   // room for 5 adjective forms + Recognised/Suggestion/Verdict/Gender keys
+const AUTOFILL_MAX_TOKENS = 750;   // room for 5 adjective forms + Recognised/Suggestion/Verdict/Gender/Synonyms/Antonyms keys
 
 // Same rationale as AUTOFILL_MAX_TOKENS, sized for a 100-150 word Swedish
 // passage plus the wordsUsed array and JSON overhead.
@@ -150,6 +152,11 @@ function autofill_(word, sourceSentence, savedEntry) {
     '"Example Sentence (Swedish)": one short everyday sentence (max 8 words) using the dictionary form (A2-B1 level), ' +
     'unless the learner supplies a source sentence (then follow that, even if it uses another form);\n' +
     '"Example Sentence (English)": its English translation;\n' +
+    '"Synonyms": an array of up to 4 Swedish synonyms of the dictionary form, "Antonyms": an array of up to 3 Swedish antonyms (motsatser). ' +
+    'Both: only real, well-established words for the headword\'s main sense and part of speech, in their dictionary form (no inflections, ' +
+    'no articles, never the headword itself), lowercase, most common first. Include ONLY words ordinary people actually use in everyday ' +
+    'conversation — skip rare, formal, literary, archaic, dialect and vulgar words. Use [] when there is no genuine synonym/antonym; never ' +
+    'invent or stretch one (e.g. function words, numerals, names and most concrete nouns have no antonym);\n' +
     '"Forms": an array of the word\'s key grammatical forms, each item shaped ' +
     '{"label": string, "sv": string, "example_sv": string, "example_en": string}, built as follows:\n' +
     '  - If Part of Speech is a noun: exactly 4 items labelled "Singular indefinite", "Singular definite", "Plural indefinite", "Plural definite" ' +
@@ -161,7 +168,7 @@ function autofill_(word, sourceSentence, savedEntry) {
     'for adjectives that only compare with "mer"/"mest", use e.g. "mer intressant"), each with a short (max 8 word) example sentence;\n' +
     '  - Otherwise (adverb, pronoun, preposition, etc.): an empty array [].\n' +
     'The "sv" field of each form item must be ONLY the inflected word itself (no article, no extra words) so it can be matched against later, e.g. "bilar" not "en bilar". ' +
-    'If the input is not a real Swedish word, still return the JSON with "Recognised" false, "English Meaning" set to "Not recognised as Swedish" and "Forms" as [].' +
+    'If the input is not a real Swedish word, still return the JSON with "Recognised" false, "English Meaning" set to "Not recognised as Swedish" and "Forms", "Synonyms" and "Antonyms" as [].' +
     (savedEntry
       ? '\nThe learner also sends an entry they SAVED earlier for this word. Compare it with your own answer and add two keys: ' +
         '"Verdict": "fix" only if the saved entry has a real error — headword is not the dictionary form, a misspelling, ' +
@@ -232,7 +239,23 @@ function autofill_(word, sourceSentence, savedEntry) {
     fields['Part of Speech'] = 'noun (' + gender + ')';
   }
   delete fields.Gender;
+  // Synonyms/Antonyms travel as the plain comma-separated strings the sheet stores.
+  const headword = String(fields['Dictionary Form'] || word || '').toLowerCase().trim();
+  fields.Synonyms = cleanWordList_(fields.Synonyms, headword, 4);
+  fields.Antonyms = cleanWordList_(fields.Antonyms, headword, 3);
   return { ok: true, fields: fields };
+}
+
+// AI word list (array, or comma-separated string) -> "a, b, c": lowercase, trimmed,
+// de-duplicated, headword removed, at most `max` entries.
+function cleanWordList_(raw, headword, max) {
+  const items = Array.isArray(raw) ? raw : String(raw || '').split(',');
+  const seen = {}, out = [];
+  items.forEach(x => {
+    const w = String(x || '').toLowerCase().trim();
+    if (w && w !== headword && !seen[w] && out.length < max) { seen[w] = true; out.push(w); }
+  });
+  return out.join(', ');
 }
 
 /**
