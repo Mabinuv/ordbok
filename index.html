@@ -2349,9 +2349,31 @@ function highlightParagraph(text, pIdx, knownMap, sStart, newSet) {
 }
 
 /* ---------- listening: browser text-to-speech (no cost, offline-capable) ---------- */
-function svVoice() {
-  try { return (speechSynthesis.getVoices() || []).find(v => /^sv\b/i.test(v.lang) || /^sv[-_]/i.test(v.lang)) || null; } catch (e) { return null; }
+function svVoices() {
+  try { return (speechSynthesis.getVoices() || []).filter(v => /^sv([-_]|$)/i.test(v.lang)); } catch (e) { return []; }
 }
+// The voice the learner picked (saved by name), else the best Swedish voice on
+// the device: Premium/Enhanced/Neural ones first, then whatever comes first.
+function svVoice() {
+  const all = svVoices();
+  if (!all.length) return null;
+  const saved = store.get('ordbok_reading_voice', '');
+  const pick = saved && all.find(v => v.name === saved);
+  if (pick) return pick;
+  const rank = v => /premium/i.test(v.name) ? 0 : /enhanced|neural|natural/i.test(v.name) ? 1 : 2;
+  return all.slice().sort((a, b) => rank(a) - rank(b))[0];
+}
+function voiceOptionsHtml() {
+  const cur = svVoice();
+  return svVoices().map(v => '<option value="' + esc(v.name) + '"' + (cur && cur.name === v.name ? ' selected' : '') + '>' + esc(v.name) + '</option>').join('');
+}
+function fillVoiceSelect() {
+  const sel = $('rdVoice'); if (!sel) return;
+  const opts = voiceOptionsHtml();
+  sel.innerHTML = opts;
+  sel.closest('label').hidden = !opts;
+}
+try { speechSynthesis.addEventListener('voiceschanged', () => { fillVoiceSelect(); updateListenBar(); }); } catch (e) {}
 function listenRate() { const r = parseFloat(store.get('ordbok_reading_speed', '1')); return r > 0 && r <= 1.5 ? r : 1; }
 function speakSv(text, onend, rate) {
   if (!('speechSynthesis' in window)) { if (onend) onend(false); return; }
@@ -2430,6 +2452,7 @@ async function renderReadReading(passage) {
     ? '<div class="rd-listenbar" role="group" aria-label="Listen to the passage">' +
       '<button type="button" id="rdPlayBtn" class="primary" data-action="play-passage">▶ Play passage</button>' +
       '<button type="button" data-action="stop-passage">■ Stop</button>' +
+      '<label class="rd-listen-speed">Voice <select id="rdVoice"></select></label>' +
       '<label class="rd-listen-speed">Speed <select id="rdSpeed"><option value="0.7">Slow</option><option value="0.85">Relaxed</option><option value="1">Normal</option></select></label>' +
       '<label class="rd-listen-first"><input type="checkbox" id="rdListenFirst"' + (R.hideText ? ' checked' : '') + '> Listen first (hide text)</label>' +
       '<span class="rd-caption" id="rdVoiceHint" hidden style="margin:0">No Swedish voice found on this device; the default voice is used.</span></div>'
@@ -2464,6 +2487,7 @@ async function renderReadReading(passage) {
     '</div>';
   R.notice = '';
   const sp = $('rdSpeed'); if (sp) sp.value = String(listenRate());
+  fillVoiceSelect();
   updateListenBar();
 }
 
@@ -3363,6 +3387,7 @@ $('readingBody').addEventListener('input', e => {
 $('readingBody').addEventListener('change', e => {
   if (e.target.id === 'rdLibThemeSel') { R.libTheme = e.target.value; renderLibraryGrid(); }
   else if (e.target.id === 'rdSpeed') { store.set('ordbok_reading_speed', e.target.value); }
+  else if (e.target.id === 'rdVoice') { store.set('ordbok_reading_voice', e.target.value); speakSv('Hej! Så här låter jag.'); }
   else if (e.target.id === 'rdListenFirst') {
     R.hideText = e.target.checked;
     const t = $('rdText'); if (t) t.classList.toggle('rd-text-hidden', R.hideText);
