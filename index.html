@@ -699,6 +699,15 @@ applyTheme(store.get('ordbok_theme', ''));
   <input id="apiUrl" placeholder="https://script.google.com/macros/s/…/exec">
   <p class="sub" id="settingsStatus" hidden></p>
   <button class="link" id="openPinFromSettings" type="button" hidden>Enter shared PIN</button>
+  <h3 style="margin:18px 0 6px;font-size:16px">Voice</h3>
+  <label for="setVoice">Swedish voice for every Listen button</label>
+  <select id="setVoice"></select>
+  <p class="sub" id="setVoiceNote"></p>
+  <label for="setRate">Speed</label>
+  <select id="setRate"><option value="0.7">Slow</option><option value="0.85">Relaxed</option><option value="1">Normal</option></select>
+  <label for="setPause">Pauses when reading a passage</label>
+  <select id="setPause"><option value="none">Natural (no extra pauses)</option><option value="short">Short between sentences</option><option value="long">Long between sentences</option></select>
+  <button class="link" id="testVoice" type="button">▶ Test voice</button>
   <div class="row">
     <button id="cancelSettings">Cancel</button>
     <button class="go" id="saveSettings">Save</button>
@@ -1343,9 +1352,76 @@ function entryBodyHtml(r) {
     ${tags.length ? `<div class="tags">${tags.map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}`;
 }
 
+/* ---------- speech engine (browser text-to-speech, no cost) ----------
+   ONE place that talks, so every Listen button in the app uses the same
+   voice/speed (Settings → Voice). Keeps the utterance referenced until it
+   ends (browsers can garbage-collect a speaking utterance and never fire
+   `onend`), and delays speak() slightly after cancel() (Safari drops an
+   utterance queued in the same tick as a cancel). */
+const SPEECH_OK = 'speechSynthesis' in window;
+let speechToken = 0, speechCur = null, speechTimer = null;
+function svVoices() {
+  try { return (speechSynthesis.getVoices() || []).filter(v => /^sv([-_]|$)/i.test(v.lang)); } catch (e) { return []; }
+}
+const voiceKey = v => v.voiceURI || v.name;
+// The learner's pick (saved by voiceURI), else the best Swedish voice on the
+// device: Premium > Enhanced/Neural/Natural > on-device > network voices.
+function svVoice() {
+  const all = svVoices();
+  if (!all.length) return null;
+  const saved = store.get('ordbok_voice', store.get('ordbok_reading_voice', ''));
+  const pick = saved && all.find(v => voiceKey(v) === saved);
+  if (pick) return pick;
+  // macOS puts the quality in the voice ID (…voice.premium.sv-SE.Alva) even when
+  // the display name is just "Alva", so look at both.
+  const rank = v => { const id = v.name + ' ' + (v.voiceURI || ''); return /premium/i.test(id) ? 0 : /enhanced|neural|natural/i.test(id) ? 1 : /compact/i.test(id) || !v.localService ? 3 : 2; };
+  return all.slice().sort((a, b) => rank(a) - rank(b))[0];
+}
+function speechRate() {
+  const r = parseFloat(store.get('ordbok_speech_rate', store.get('ordbok_reading_speed', '1')));
+  return r > 0 && r <= 1.5 ? r : 1;
+}
+// 'none' | 'short' | 'long' — how long the passage rests between sentences.
+function speechPauseMode() { const m = store.get('ordbok_speech_pause', 'none'); return m === 'short' || m === 'long' ? m : 'none'; }
+function speechStop() {
+  speechToken++; clearTimeout(speechTimer); speechCur = null;
+  try { speechSynthesis.cancel(); } catch (e) {}
+}
+// opts: { rate, onend(ok), onboundary(ev) }. Starting a new utterance
+// supersedes (and silences the callbacks of) whatever was playing.
+function speechSay(text, opts) {
+  opts = opts || {};
+  if (!SPEECH_OK || !String(text || '').trim()) { if (opts.onend) opts.onend(false); return; }
+  const my = ++speechToken;
+  clearTimeout(speechTimer);
+  try { speechSynthesis.cancel(); } catch (e) {}
+  speechTimer = setTimeout(() => {
+    if (my !== speechToken) return;
+    const u = new SpeechSynthesisUtterance(String(text));
+    const v = svVoice();
+    u.lang = (v && v.lang) || 'sv-SE'; u.rate = opts.rate || speechRate();
+    if (v) u.voice = v;
+    u.onend = () => { if (speechCur === u) speechCur = null; if (my === speechToken && opts.onend) opts.onend(true); };
+    u.onerror = () => { if (speechCur === u) speechCur = null; if (my === speechToken && opts.onend) opts.onend(false); };
+    if (opts.onboundary) u.onboundary = ev => { if (my === speechToken) opts.onboundary(ev); };
+    speechCur = u;
+    speechSynthesis.speak(u);
+  }, 60);
+}
+// The word on its own, a short beat, then the same word in a sentence — the
+// sentence gives the intonation a single isolated word never has.
+function speakWord(word, sentence) {
+  speechSay(word, { rate: speechRate() * 0.95, onend: ok => {
+    if (!ok || !sentence || !String(sentence).trim()) return;
+    const t = speechToken;
+    setTimeout(() => { if (t === speechToken) speechSay(sentence); }, 350);
+  } });
+}
+// Listen buttons that only know the headword (Search, Words, Practice).
 function speak(word) {
-  if (!('speechSynthesis' in window)) return;
-  const u = new SpeechSynthesisUtterance(word); u.lang = 'sv-SE'; speechSynthesis.cancel(); speechSynthesis.speak(u);
+  const rows = (apiUrl ? allRowsCache : localRows()) || [];
+  const r = rows.find(x => x[W].toLowerCase() === String(word).toLowerCase());
+  speakWord(word, r ? r[XS] : '');
 }
 function renderModePill() {
   const p = $('modePill');
@@ -2031,7 +2107,8 @@ const R = {
   notice: '',             // one-time note shown above the next reading screen
   showEn: {},             // paragraph index -> English translation visible
   hideText: false,        // "listen first": passage text blurred until revealed
-  sentences: [],          // flat sentence list of the open passage (for read-aloud)
+  sentences: [], paraSents: [],   // flat sentence list + per-paragraph speech units of the open passage (read-aloud)
+  paused: false,
   listenIdx: -1, listenToken: 0, listening: false,
   writeDraft: [], writeBusy: false, writeError: '',
 };
@@ -2317,8 +2394,14 @@ function buildKnownWordMap(rows) {
 // Punctuation naturally stays outside, since \p{L} only matches letters.
 // Rough sentence split used both to draw per-sentence play buttons and to feed
 // read-aloud, so the two always agree on what "sentence 7" is.
+// Abbreviations ("t.ex.", "kl. 8", "bl.a."), times and decimals ("8.30", "3.5")
+// contain dots that don't end a sentence — mask them while splitting.
 function splitSentences(text) {
-  return (String(text).match(/[^.!?]+[.!?]*\s*/g) || [String(text)]).filter(x => x.trim());
+  const masked = String(text)
+    .replace(/\b(?:t\.ex|bl\.a|m\.fl|m\.m|o\.s\.v|d\.v\.s|f\.o\.m|t\.o\.m)\b(\.(?=\s*[\p{Ll}\d]))?/giu, m => m.replace(/\./g, '\u0001'))
+    .replace(/\b(?:kl|nr|ca|dr|mr|mrs|fr|st|tel|bl)\.(?=\s*[\p{Ll}\d])/giu, m => m.replace(/\./g, '\u0001'))
+    .replace(/(\d)\.(?=\d)/g, '$1\u0001');
+  return (masked.match(/[^.!?]+[.!?]*\s*/g) || [masked]).filter(x => x.trim()).map(x => x.replace(/\u0001/g, '.'));
 }
 function wordButtonsHtml(text, pIdx, knownMap, newSet) {
   let out = '', last = 0, m;
@@ -2348,84 +2431,130 @@ function highlightParagraph(text, pIdx, knownMap, sStart, newSet) {
   }).join('');
 }
 
-/* ---------- listening: browser text-to-speech (no cost, offline-capable) ---------- */
-function svVoices() {
-  try { return (speechSynthesis.getVoices() || []).filter(v => /^sv([-_]|$)/i.test(v.lang)); } catch (e) { return []; }
-}
-// The voice the learner picked (saved by name), else the best Swedish voice on
-// the device: Premium/Enhanced/Neural ones first, then whatever comes first.
-function svVoice() {
-  const all = svVoices();
-  if (!all.length) return null;
-  const saved = store.get('ordbok_reading_voice', '');
-  const pick = saved && all.find(v => v.name === saved);
-  if (pick) return pick;
-  const rank = v => /premium/i.test(v.name) ? 0 : /enhanced|neural|natural/i.test(v.name) ? 1 : 2;
-  return all.slice().sort((a, b) => rank(a) - rank(b))[0];
-}
+/* ---------- listening: voice pickers + passage playback (engine: speechSay above) ---------- */
 function voiceOptionsHtml() {
   const cur = svVoice();
-  return svVoices().map(v => '<option value="' + esc(v.name) + '"' + (cur && cur.name === v.name ? ' selected' : '') + '>' + esc(v.name) + '</option>').join('');
+  // Keyed by voiceURI: macOS can list a standard and a Premium voice under the
+  // same name, and a name-only key would always resolve to the first of them.
+  const all = svVoices();
+  const dup = n => all.filter(v => v.name === n).length > 1;
+  return all.map(v => {
+    const key = voiceKey(v);
+    const q = /premium/i.test(key) ? 'Premium' : /enhanced/i.test(key) ? 'Enhanced' : /compact/i.test(key) ? 'Standard' : '';
+    const tail = (q && !new RegExp(q, 'i').test(v.name)) || dup(v.name) ? ' (' + (q || String(key).replace(/^.*[./]/, '')) + ')' : '';
+    return '<option value="' + esc(key) + '"' + (cur && voiceKey(cur) === key ? ' selected' : '') + '>' + esc(v.name + tail) + '</option>';
+  }).join('');
 }
-function fillVoiceSelect() {
-  const sel = $('rdVoice'); if (!sel) return;
+// Fills every voice <select> (listen bar + Settings) and the "who is reading" captions.
+function fillVoiceSelects() {
   const opts = voiceOptionsHtml();
-  sel.innerHTML = opts;
-  sel.closest('label').hidden = !opts;
+  const cur = svVoice();
+  ['rdVoice', 'setVoice'].forEach(id => {
+    const sel = $(id); if (!sel) return;
+    sel.innerHTML = opts;
+    const lab = sel.closest('label'); if (lab && id === 'rdVoice') lab.hidden = !opts;
+  });
+  const name = cur ? cur.name + (cur.localService === false ? ' (online)' : '') : 'the browser’s default voice';
+  const n1 = $('rdVoiceName'); if (n1) n1.textContent = 'Reading: ' + name;
+  const n2 = $('setVoiceNote');
+  if (n2) n2.textContent = !SPEECH_OK ? 'This browser has no speech support.'
+    : cur ? 'Reading now: ' + name + '. Applies to every Listen button.'
+    : 'No Swedish voice found yet. On a Mac: System Settings → Accessibility → Spoken Content → System Voice → Manage Voices, download a Swedish voice (Premium sounds best), then reopen the browser. Safari can use Premium voices; Chrome often can’t.';
 }
-try { speechSynthesis.addEventListener('voiceschanged', () => { fillVoiceSelect(); updateListenBar(); }); } catch (e) {}
-function listenRate() { const r = parseFloat(store.get('ordbok_reading_speed', '1')); return r > 0 && r <= 1.5 ? r : 1; }
-function speakSv(text, onend, rate) {
-  if (!('speechSynthesis' in window)) { if (onend) onend(false); return; }
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'sv-SE'; u.rate = rate || listenRate();
-  const v = svVoice(); if (v) u.voice = v;
-  u.onend = () => { if (onend) onend(true); };
-  u.onerror = () => { if (onend) onend(false); };
-  speechSynthesis.speak(u);
+// Voices load asynchronously and Safari doesn't always fire `voiceschanged`,
+// so also poll for a few seconds until the list shows up.
+function loadVoices() {
+  if (!SPEECH_OK) return;
+  let tries = 0;
+  const tick = () => {
+    fillVoiceSelects(); updateListenBar();
+    if (!svVoices().length && ++tries < 14) setTimeout(tick, 250);
+  };
+  tick();
 }
-function markPlaying(idx) {
+try { speechSynthesis.addEventListener('voiceschanged', () => { fillVoiceSelects(); updateListenBar(); }); } catch (e) {}
+function markPlaying(a, b) {
   document.querySelectorAll('#readingBody .rd-sent.playing').forEach(el => el.classList.remove('playing'));
-  if (idx < 0) return;
-  const el = document.querySelector('#readingBody .rd-sent[data-s="' + idx + '"]');
-  if (el) { el.classList.add('playing'); if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+  if (a < 0) return;
+  let first = null;
+  for (let i = a; i <= (b == null ? a : b); i++) {
+    const el = document.querySelector('#readingBody .rd-sent[data-s="' + i + '"]');
+    if (el) { el.classList.add('playing'); if (!first) first = el; }
+  }
+  if (first && first.scrollIntoView) first.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 function updateListenBar() {
   const b = $('rdPlayBtn'); if (!b) return;
-  b.textContent = R.listening ? '⏸ Pause' : (R.listenIdx > 0 ? '▶ Resume' : '▶ Play passage');
+  b.textContent = R.listening ? '⏸ Pause' : (R.paused || R.listenIdx > 0 ? '▶ Resume' : '▶ Play passage');
   const hint = $('rdVoiceHint');
-  if (hint) hint.hidden = !('speechSynthesis' in window) ? false : !!svVoice() || !(speechSynthesis.getVoices() || []).length;
+  if (hint) hint.hidden = !SPEECH_OK ? false : !!svVoice() || !(speechSynthesis.getVoices() || []).length;
 }
 function stopListening() {
-  R.listenToken++; R.listening = false; R.listenIdx = -1;
-  try { speechSynthesis.cancel(); } catch (e) {}
+  R.listenToken++; R.listening = false; R.paused = false; R.listenIdx = -1;
+  speechStop();
   markPlaying(-1); updateListenBar();
 }
+// Native pause keeps your place mid-sentence. If it isn't available (or we're
+// between sentences), stop the chain and resume from the current sentence.
 function pauseListening() {
-  R.listenToken++; R.listening = false;
-  try { speechSynthesis.cancel(); } catch (e) {}
-  updateListenBar();
+  if (SPEECH_OK && speechCur && speechSynthesis.speaking && !speechSynthesis.paused) {
+    try { speechSynthesis.pause(); R.paused = true; R.listening = false; updateListenBar(); return; } catch (e) {}
+  }
+  R.listenToken++; R.listening = false; R.paused = false; speechStop(); updateListenBar();
 }
-// Plays sentences from `from` onward (or just one when `single`), highlighting each.
+function resumeListening() {
+  const from = Math.max(0, R.listenIdx);
+  try { speechSynthesis.resume(); } catch (e) {}
+  R.paused = false; R.listening = true; updateListenBar();
+  // Some voices (notably network ones) ignore resume(): restart where we were.
+  setTimeout(() => { if (R.listening && SPEECH_OK && !speechSynthesis.speaking) playSentences(from, false); }, 500);
+}
+// Plays from sentence `from`. `single` = just that sentence (tap-to-replay).
+// Pause setting "None" speaks whole paragraphs (smooth intonation; the current
+// sentence follows the voice's word-boundary events when it emits them);
+// "Short"/"Long" speak sentence by sentence with a rest in between.
 function playSentences(from, single) {
   if (!R.sentences.length) return;
-  try { speechSynthesis.cancel(); } catch (e) {}
+  speechStop();
   const token = ++R.listenToken;
-  R.listening = true;
+  R.listening = true; R.paused = false;
+  const finish = () => { if (token !== R.listenToken) return; R.listening = false; R.paused = false; R.listenIdx = -1; markPlaying(-1); updateListenBar(); };
+  const mode = single ? 'sentence' : speechPauseMode();
+  if (mode === 'none') {
+    const stepP = pi => {
+      if (token !== R.listenToken) return;
+      if (pi >= R.paraSents.length) { finish(); return; }
+      const ps = R.paraSents[pi];
+      R.listenIdx = ps.start; markPlaying(ps.start, ps.start + ps.count - 1); updateListenBar();
+      speechSay(ps.text, {
+        onboundary: ev => {
+          if (typeof ev.charIndex !== 'number' || token !== R.listenToken) return;
+          let k = ps.ends.findIndex(e => ev.charIndex < e); if (k < 0) k = ps.count - 1;
+          if (R.listenIdx !== ps.start + k) { R.listenIdx = ps.start + k; markPlaying(ps.start + k); }
+        },
+        onend: ok => { if (token !== R.listenToken) return; if (!ok) { finish(); return; } setTimeout(() => stepP(pi + 1), 250); },
+      });
+    };
+    let p = R.paraSents.findIndex(x => from < x.start + x.count); if (p < 0) p = 0;
+    stepP(p);
+    return;
+  }
+  const gap = mode === 'long' ? 1200 : 400;
   const step = i => {
     if (token !== R.listenToken) return;
-    if (i >= R.sentences.length) { R.listening = false; R.listenIdx = -1; markPlaying(-1); updateListenBar(); return; }
+    if (i >= R.sentences.length) { finish(); return; }
     R.listenIdx = i; markPlaying(i); updateListenBar();
-    speakSv(R.sentences[i].trim(), ok => {
+    speechSay(R.sentences[i].trim(), { onend: ok => {
       if (token !== R.listenToken) return;
-      if (!ok || single) { R.listening = false; if (single) R.listenIdx = -1; markPlaying(-1); updateListenBar(); return; }
-      step(i + 1);
-    });
+      if (!ok || single) { if (single) R.listenIdx = -1; R.listening = false; markPlaying(-1); updateListenBar(); return; }
+      setTimeout(() => step(i + 1), gap);
+    } });
   };
   step(from);
 }
 function togglePlayPassage() {
   if (R.listening) pauseListening();
+  else if (R.paused) resumeListening();
   else playSentences(R.listenIdx > 0 ? R.listenIdx : 0, false);
 }
 
@@ -2438,23 +2567,27 @@ async function renderReadReading(passage) {
   const newSet = new Set((passage.targets || []).filter(t => t.isNew).map(t => t.paragraphIndex + '|' + String(t.surface).toLowerCase()));
   const newWords = (passage.targets || []).filter(t => t.isNew);
   const translations = Array.isArray(passage.translations) ? passage.translations : [];
-  R.sentences = []; let sCount = 0;
+  R.sentences = []; R.paraSents = []; let sCount = 0;
   const html = passage.paragraphs.map((p, i) => {
     const start = sCount;
     const sents = splitSentences(p); sCount += sents.length; R.sentences.push(...sents);
+    let acc = 0;
+    R.paraSents.push({ start, count: sents.length, text: sents.join(''), ends: sents.map(x => (acc += x.length)) });
     return '<div class="rd-para"><p>' + highlightParagraph(p, i, knownMap, start, newSet) + '</p>' +
       (translations[i] ? '<button type="button" class="rd-en-btn" data-action="toggle-en" data-p="' + i + '" aria-expanded="' + !!R.showEn[i] + '">' +
         (R.showEn[i] ? 'Hide English' : 'English') + '</button>' +
         '<p class="rd-en" lang="en"' + (R.showEn[i] ? '' : ' hidden') + '>' + esc(translations[i]) + '</p>' : '') + '</div>';
   }).join('');
-  const hasVoice = 'speechSynthesis' in window;
+  const hasVoice = SPEECH_OK;
   const listenBar = hasVoice
     ? '<div class="rd-listenbar" role="group" aria-label="Listen to the passage">' +
       '<button type="button" id="rdPlayBtn" class="primary" data-action="play-passage">▶ Play passage</button>' +
       '<button type="button" data-action="stop-passage">■ Stop</button>' +
       '<label class="rd-listen-speed">Voice <select id="rdVoice"></select></label>' +
       '<label class="rd-listen-speed">Speed <select id="rdSpeed"><option value="0.7">Slow</option><option value="0.85">Relaxed</option><option value="1">Normal</option></select></label>' +
+      '<label class="rd-listen-speed">Pauses <select id="rdPause"><option value="none">Natural</option><option value="short">Short</option><option value="long">Long</option></select></label>' +
       '<label class="rd-listen-first"><input type="checkbox" id="rdListenFirst"' + (R.hideText ? ' checked' : '') + '> Listen first (hide text)</label>' +
+      '<span class="rd-caption" id="rdVoiceName" style="margin:0"></span>' +
       '<span class="rd-caption" id="rdVoiceHint" hidden style="margin:0">No Swedish voice found on this device; the default voice is used.</span></div>'
     : '';
   const wr = passage.writing && passage.writing.length;
@@ -2486,8 +2619,9 @@ async function renderReadReading(passage) {
     '<aside id="rdPanel" class="rd-panel" hidden></aside>' +
     '</div>';
   R.notice = '';
-  const sp = $('rdSpeed'); if (sp) sp.value = String(listenRate());
-  fillVoiceSelect();
+  const sp = $('rdSpeed'); if (sp) sp.value = String(speechRate());
+  const pz = $('rdPause'); if (pz) pz.value = speechPauseMode();
+  fillVoiceSelects();
   updateListenBar();
 }
 
@@ -2529,9 +2663,9 @@ function matchedRequestedWord(word) {
 // since every word is tappable, not only this passage's targets — but
 // findExistingRow's stemming and autofill's own Dictionary Form resolution
 // already handle an inflected form correctly, same as typing one into Search.
-function listenBtnHtml(word) {
-  return 'speechSynthesis' in window
-    ? '<button type="button" class="link rd-panel-listen" data-action="say-word" data-word="' + esc(word) + '">' + ICON_SPEAKER + ' Listen</button>' : '';
+function listenBtnHtml(word, sentence) {
+  return SPEECH_OK
+    ? '<button type="button" class="link rd-panel-listen" data-action="say-word" data-word="' + esc(word) + '" data-sentence="' + esc(sentence || '') + '">' + ICON_SPEAKER + ' Listen</button>' : '';
 }
 async function openWordPanel(word, pidx, btnEl) {
   const panel = $('rdPanel');
@@ -2541,6 +2675,7 @@ async function openWordPanel(word, pidx, btnEl) {
   panel.hidden = false;
   panel.innerHTML = '<p class="empty">Loading…</p>';
 
+  const ctxSentence = (R.current && R.current.paragraphs[pidx]) ? sentenceContaining(R.current.paragraphs[pidx], word) : '';
   const requested = matchedRequestedWord(word);
   if (requested && R.current && R.current.openedWords.indexOf(requested.toLowerCase()) === -1) {
     R.current.openedWords = R.current.openedWords.concat([requested.toLowerCase()]);
@@ -2551,16 +2686,16 @@ async function openWordPanel(word, pidx, btnEl) {
   try { const rows = await fetchAllRows(false); row = findExistingRow(rows, word); } catch (e) { /* fall through to "not in your words" */ }
   const closeBtn = '<button type="button" class="rd-panel-close" data-action="close-panel" aria-label="Close word details">✕</button>';
   if (row) {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + svWordHtml(row) + '</div>' + listenBtnHtml(row[W]) + posChipHtml(row) + entryBodyHtml(row) +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + svWordHtml(row) + '</div>' + listenBtnHtml(word, ctxSentence || row[XS]) + posChipHtml(row) + entryBodyHtml(row) +
       '<div class="rd-panel-grade">' +
       '<button type="button" data-action="grade" data-knew="0" data-word="' + esc(word) + '">Still learning</button>' +
       '<button type="button" data-action="grade" data-knew="1" data-word="' + esc(word) + '">I know it</button>' +
       '</div>';
   } else if (!apiUrl) {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word) +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word, ctxSentence) +
       '<p class="rd-lib-sub">Not in your words yet. Connect a Google Sheet to look it up and save it — see Settings.</p>';
   } else {
-    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word) +
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word, ctxSentence) +
       '<p class="rd-lib-sub">Not in your words yet.</p>' +
       '<button type="button" class="primary" data-action="save-word" data-word="' + esc(word) + '" data-pidx="' + pidx + '">Save to my words</button>';
   }
@@ -2760,7 +2895,7 @@ function renderReadWrite() {
           '<div class="rd-write-a" lang="sv">' + esc(a.answer) + '</div>' +
           '<span class="chip ' + (a.correct ? '' : 'chip-muted') + '">' + (a.correct ? '✓ Looks good' : 'Needs a fix') + '</span>' +
           (!same && a.corrected ? '<div class="rd-write-fix"><span class="rd-caption" style="margin:0">Better:</span> <span lang="sv">' + esc(a.corrected) + '</span> ' +
-            (('speechSynthesis' in window) ? '<button type="button" class="link" data-action="say-word" data-word="' + esc(a.corrected) + '" aria-label="Listen to the corrected sentence">' + ICON_SPEAKER + '</button>' : '') + '</div>' : '') +
+            (SPEECH_OK ? '<button type="button" class="link" data-action="say-word" data-word="' + esc(a.corrected) + '" aria-label="Listen to the corrected sentence">' + ICON_SPEAKER + '</button>' : '') + '</div>' : '') +
           ((a.issues && a.issues.length) ? '<ul class="rd-write-issues">' + a.issues.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
           (a.tip ? '<div class="rd-caption" style="margin:6px 0 0">' + esc(a.tip) + '</div>' : '') + '</div>';
       }).join('') +
@@ -3330,7 +3465,7 @@ $('readingBody').addEventListener('click', e => {
   else if (action === 'retake-missed') goToQuiz(true, R.quizMissedIdx.slice());
   else if (action === 'quiz-play') {
     const q = R.current && R.quizItems.length ? currentQuizQ() : null;
-    if (q && q.spoken) { try { speechSynthesis.cancel(); } catch (e) {} speakSv(q.spoken, null, btn.dataset.slow ? 0.6 : 0.9); }
+    if (q && q.spoken) { stopListening(); speechSay(q.spoken, { rate: speechRate() * (btn.dataset.slow ? 0.65 : 1) }); }
   }
   else if (action === 'start-write') { R.writeEditing = false; goToWrite(); }
   else if (action === 'redo-write') { R.writeEditing = true; R.writeDraft = R.current.writing.map(() => ''); R.writeDraft._id = R.current.id; renderReadWrite(); }
@@ -3349,7 +3484,7 @@ $('readingBody').addEventListener('click', e => {
   else if (action === 'play-passage') togglePlayPassage();
   else if (action === 'stop-passage') stopListening();
   else if (action === 'say-sentence') playSentences(parseInt(btn.dataset.s, 10), true);
-  else if (action === 'say-word') { try { speechSynthesis.cancel(); } catch (e) {} speakSv(btn.dataset.word, null, 0.9); }
+  else if (action === 'say-word') { stopListening(); if (btn.dataset.sentence) speakWord(btn.dataset.word, btn.dataset.sentence); else speechSay(btn.dataset.word); }
   else if (action === 'toggle-en') {
     const i = parseInt(btn.dataset.p, 10);
     R.showEn[i] = !R.showEn[i];
@@ -3386,8 +3521,9 @@ $('readingBody').addEventListener('input', e => {
 });
 $('readingBody').addEventListener('change', e => {
   if (e.target.id === 'rdLibThemeSel') { R.libTheme = e.target.value; renderLibraryGrid(); }
-  else if (e.target.id === 'rdSpeed') { store.set('ordbok_reading_speed', e.target.value); }
-  else if (e.target.id === 'rdVoice') { store.set('ordbok_reading_voice', e.target.value); speakSv('Hej! Så här låter jag.'); }
+  else if (e.target.id === 'rdSpeed') { store.set('ordbok_speech_rate', e.target.value); }
+  else if (e.target.id === 'rdPause') { store.set('ordbok_speech_pause', e.target.value); }
+  else if (e.target.id === 'rdVoice') { store.set('ordbok_voice', e.target.value); fillVoiceSelects(); speechSay('Hej! Så här låter jag.'); }
   else if (e.target.id === 'rdListenFirst') {
     R.hideText = e.target.checked;
     const t = $('rdText'); if (t) t.classList.toggle('rd-text-hidden', R.hideText);
@@ -3434,8 +3570,17 @@ document.addEventListener('keydown', e => {
 });
 
 // ---- Settings ----
-$('settingsMenuBtn').addEventListener('click', () => { $('apiUrl').value = apiUrl; $('settings').showModal(); });
-$('cancelSettings').addEventListener('click', () => $('settings').close());
+$('settingsMenuBtn').addEventListener('click', () => {
+  $('apiUrl').value = apiUrl;
+  fillVoiceSelects();
+  $('setRate').value = String(speechRate()); $('setPause').value = speechPauseMode();
+  $('settings').showModal();
+});
+$('setVoice').addEventListener('change', e => { store.set('ordbok_voice', e.target.value); fillVoiceSelects(); speechSay('Hej! Så här låter jag.'); });
+$('setRate').addEventListener('change', e => store.set('ordbok_speech_rate', e.target.value));
+$('setPause').addEventListener('change', e => store.set('ordbok_speech_pause', e.target.value));
+$('testVoice').addEventListener('click', () => speechSay('Hej! Så här låter jag. Jag läser dina ord och berättelser högt.'));
+$('cancelSettings').addEventListener('click', () => { speechStop(); $('settings').close(); });
 $('saveSettings').addEventListener('click', () => {
   const newUrl = $('apiUrl').value.trim();
   if (newUrl !== apiUrl) { apiUrl = newUrl; store.set('ordbok_api_url', apiUrl); invalidateRowsCache(); hydrateRowsCache(); batchUnsupported = false; outboxPaused = false; }
@@ -3449,6 +3594,7 @@ $('openPinFromSettings').addEventListener('click', async () => {
 outbox = safeJson(store.get(OUTBOX_KEY, ''), []);
 if (!Array.isArray(outbox)) outbox = [];
 hydrateRowsCache();
+loadVoices();
 renderModePill();
 renderSyncPill();
 renderThemeBtn();
