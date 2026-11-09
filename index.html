@@ -216,6 +216,13 @@ applyTheme(store.get('ordbok_theme', ''));
   .forms tr:last-child :is(th, td) { border-bottom: 0; }
   .forms th { color: var(--muted); font-weight: 500; width: 32%; }
   .forms td .sv { font: 600 17px var(--serif); }
+  .noun-forms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .noun-forms .nf { background: var(--bg); border-radius: var(--radius); padding: 10px 12px; box-shadow: var(--shadow); color: var(--ink); }
+  .noun-forms h4 { font: 600 11px var(--sans); margin: 0 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .noun-forms .nf-w .sv { font: 600 18px var(--serif); }
+  .noun-forms .ex { margin-top: 4px; font-size: 13px; }
+  .noun-forms .ex .s { display: block; font-style: italic; }
+  .noun-forms .ex .e { display: block; color: var(--muted); }
   .forms td .ex { display: block; margin-top: 2px; font-size: 13px; }
   .forms td .ex .s { display: block; font-style: italic; }
   .forms td .ex .e { display: block; color: var(--muted); }
@@ -233,7 +240,7 @@ applyTheme(store.get('ordbok_theme', ''));
   .seg { display: inline-flex; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 3px; gap: 2px; }
   .seg button { min-height: 36px; padding: 4px 14px; border: 0; border-radius: 9px; background: none; color: var(--muted); font-weight: 600; font-size: 14px; }
   .seg button[aria-pressed="true"] { background: var(--lake); color: var(--on-lake); }
-  #checkSetup .seg { flex-wrap: wrap; }   /* four scopes don't fit one row at phone width */
+  #checkSetup .seg { flex-wrap: wrap; }   /* five scopes don't fit one row at phone width */
   .list { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
   details.entry { border-bottom: 1px solid var(--line); border-left: 3px solid transparent; }
   details.entry:last-child { border-bottom: 0; }
@@ -687,6 +694,7 @@ applyTheme(store.get('ordbok_theme', ''));
       <button type="button" data-scope="all" aria-pressed="false">All words</button>
       <button type="button" data-scope="gender" aria-pressed="false">Missing en/ett</button>
       <button type="button" data-scope="related" aria-pressed="false">Missing synonyms</button>
+      <button type="button" data-scope="nounforms" aria-pressed="false">Missing noun forms</button>
     </div>
     <p class="msg" id="checkScopeNote"></p>
   </div>
@@ -1352,8 +1360,34 @@ function formsTableHtml(forms) {
 
 // The body of a word entry (pronunciation, meaning, example, forms, Seen As,
 // tags) — shared by the My words list and the Search result card.
+// Noun forms: canonical slot for a saved label (new Swedish labels and the legacy
+// "Singular indefinite"/"Plural definite"... ones both map here), or null.
+function nounSlot(label) {
+  const l = (label || '').toLowerCase();
+  const def = l.includes('bestämd') || l.includes('definite') && !l.includes('indefinite');
+  const pl = l.includes('plural');
+  if (!pl && !l.includes('singular')) return null;
+  return (pl ? 'p' : 's') + (def ? 'd' : 'i');
+}
+const NOUN_SLOT_LABEL = { si: 'Singular', sd: 'Bestämd singular', pi: 'Plural', pd: 'Bestämd plural' };
+// Compact noun-forms grid (Singular / Bestämd singular / Plural / Bestämd plural) with the
+// en/ett article on the singular. '' when the row isn't a noun or its labels aren't recognised
+// (the caller then falls back to the generic forms table).
+function nounFormsHtml(r) {
+  const g = nounGender(r[POS]);
+  if (!g) return '';
+  const forms = parseForms(r[GF]), by = {};
+  forms.forEach(f => { const k = nounSlot(f.label); if (k && f.sv && !by[k]) by[k] = f; });
+  if (forms.length !== Object.keys(by).length || !Object.keys(by).length) return '';
+  const art = g === 'plural' ? '' : g;
+  return '<div class="noun-forms">' + ['si', 'sd', 'pi', 'pd'].filter(k => by[k]).map(k => {
+    const f = by[k], pre = (k === 'si' && art) ? `<span class="gender-pre" data-g="${art}">${art}</span>` : '';
+    return `<div class="nf"><h4>${NOUN_SLOT_LABEL[k]}</h4><div class="nf-w">${pre}<span class="sv" lang="sv">${esc(f.sv)}</span></div>` +
+      (f.example_sv ? `<div class="ex"><span class="s" lang="sv">${esc(f.example_sv)}</span>${f.example_en ? '<span class="e">' + esc(f.example_en) + '</span>' : ''}</div>` : '') + '</div>';
+  }).join('') + '</div>';
+}
 function entryBodyHtml(r) {
-  const forms = formsTableHtml(parseForms(r[GF]));
+  const forms = nounFormsHtml(r) || formsTableHtml(parseForms(r[GF]));
   const seen = parseSeenAs(r[SEEN]), tags = parseTags(r[TAGS]);
   const relRow = (label, list) => list.length
     ? `<div class="rel"><h3>${label}</h3>${list.map(w => `<button type="button" class="rel-chip" data-rel="${esc(w)}" lang="sv">${esc(w)}</button>`).join('')}</div>` : '';
@@ -3150,8 +3184,14 @@ const CHECK_CONCURRENCY = 3;
 const CK = { scope: 'flagged', running: false, stop: false, results: [] };
 const checkTargets = rows => CK.scope === 'flagged' ? rows.filter(isFlagged)
   : CK.scope === 'related' ? rows.filter(r => !(r[SYN] || '').trim() && !(r[ANT] || '').trim())   // no synonyms or antonyms yet
+  : CK.scope === 'nounforms' ? rows.filter(needsNounForms)   // nouns without plural / bestämd plural forms
   : CK.scope === 'gender' ? rows.filter(r => (r[POS] || '').trim().toLowerCase() === 'noun')   // nouns saved without en/ett
   : rows;
+function needsNounForms(r) {
+  if (!/^noun\b/i.test((r[POS] || '').trim())) return false;
+  const slots = parseForms(r[GF]).map(f => nounSlot(f.label));
+  return !(slots.includes('pi') && slots.includes('pd'));
+}
 const GENDER_POS_RE = /^noun \((en|ett|en\/ett|plural)\)$/;
 async function openCheck() {
   CK.results = []; CK.stop = false;
@@ -3167,9 +3207,11 @@ async function updateCheckScope() {
   try { n = checkTargets(await fetchAllRows(false)).length; } catch (e) { /* shown as 0 */ }
   $('checkScopeNote').textContent = n
     ? n + ' word' + (n === 1 ? '' : 's') + (CK.scope === 'gender' ? ' without en/ett — one AI call each; only the part of speech changes.'
-      : CK.scope === 'related' ? ' without synonyms/antonyms — one AI call each; only those two fields change.' : ' to check — one AI call each.')
+      : CK.scope === 'related' ? ' without synonyms/antonyms — one AI call each; only those two fields change.'
+      : CK.scope === 'nounforms' ? ' missing plural forms — one AI call each; only the forms change.' : ' to check — one AI call each.')
     : CK.scope === 'flagged' ? 'No flagged words. Flag entries that look wrong, or check all words.'
     : CK.scope === 'gender' ? 'No nouns are missing en/ett.'
+    : CK.scope === 'nounforms' ? 'Every noun already has its plural forms.'
     : CK.scope === 'related' ? 'Every word already has synonyms or antonyms.' : 'No words to check yet.';
   $('checkStart').disabled = !n;
 }
@@ -3206,6 +3248,9 @@ function renderCheckItem(i) {
     body = `<div class="ch-words"><span class="sv" lang="sv">${esc(o[W])}</span>: ${esc(o[EN])}</div>` +
       `<div class="ch-issue">${res.related.syn ? 'Synonyms: <b lang="sv">' + esc(res.related.syn) + '</b>' : ''}${res.related.syn && res.related.ant ? '<br>' : ''}` +
       `${res.related.ant ? 'Antonyms: <b lang="sv">' + esc(res.related.ant) + '</b>' : ''}</div>`;
+  } else if (res.nounForms) {
+    body = `<div class="ch-words"><span class="sv" lang="sv">${esc(o[W])}</span>: ${esc(o[EN])}</div>` +
+      `<div class="ch-issue">${res.nounForms.map(x => '<b lang="sv">' + esc(x.sv) + '</b>').join(' · ')}</div>`;
   } else if (res.gender) {
     body = `<div class="ch-words"><span class="sv" lang="sv">${esc(o[W])}</span>: ${esc(o[EN])}</div>` +
       `<div class="ch-issue">noun → <b>${esc(res.gender.replace(/^noun \(|\)$/g, ''))}</b></div>`;
@@ -3255,6 +3300,18 @@ async function runCheck() {
           done++; if (!CK.stop) update();
           continue;
         }
+        if (CK.scope === 'nounforms') {
+          const data = await post({ action: 'autofill', word: r[W], sourceSentence: r[XS] || '' });
+          const f = data.fields || {};
+          const forms = parseForms(f[GF]);
+          if (!CK.stop && !notRecognised(f) && forms.some(x => nounSlot(x.label) === 'pi' || nounSlot(x.label) === 'pd') &&
+              String(f['Dictionary Form'] || r[W]).trim().toLowerCase() === r[W].trim().toLowerCase()) {
+            CK.results.push({ old: r, f: {}, nounForms: forms });
+            renderCheckItem(CK.results.length - 1);
+          }
+          done++; if (!CK.stop) update();
+          continue;
+        }
         if (CK.scope === 'gender') {
           const data = await post({ action: 'autofill', word: r[W], sourceSentence: r[XS] || '' });
           const pos = String((data.fields || {})[POS] || '').trim().toLowerCase();
@@ -3282,7 +3339,7 @@ async function runCheck() {
   $('checkStop').hidden = true;
   $('checkBar').style.width = '100%';
   $('checkStatus').textContent = (CK.stop ? 'Stopped after ' + done + ' of ' + targets.length + '. ' : 'Checked ' + done + ' words. ') +
-    (CK.results.length ? CK.results.length + (CK.scope === 'gender' || CK.scope === 'related' ? ' can be filled in' : ' look wrong') + ' — untick any you want to keep, then Apply.' : CK.scope === 'gender' ? 'No en/ett found to add.' : CK.scope === 'related' ? 'No synonyms or antonyms found to add.' : 'Everything looks fine.') +
+    (CK.results.length ? CK.results.length + (CK.scope === 'gender' || CK.scope === 'related' || CK.scope === 'nounforms' ? ' can be filled in' : ' look wrong') + ' — untick any you want to keep, then Apply.' : CK.scope === 'gender' ? 'No en/ett found to add.' : CK.scope === 'related' ? 'No synonyms or antonyms found to add.' : CK.scope === 'nounforms' ? 'No noun forms found to add.' : 'Everything looks fine.') +
     (failed ? ' ' + failed + ' could not be checked (try again later).' : '');
   $('checkApply').hidden = !CK.results.length;
 }
@@ -3298,6 +3355,10 @@ async function applyCheck() {
       if (res.related) {
         // Only Synonyms/Antonyms change; Learned/Review State dropped like the gender fill below.
         const row = Object.assign({}, res.old, { [SYN]: res.related.syn, [ANT]: res.related.ant });
+        delete row[L]; delete row[RS];
+        await apiSave(row);
+      } else if (res.nounForms) {
+        const row = Object.assign({}, res.old, { [GF]: JSON.stringify(res.nounForms) });
         delete row[L]; delete row[RS];
         await apiSave(row);
       } else if (res.gender) {

@@ -84,7 +84,7 @@ const POS_OPTIONS = ['noun (en)', 'noun (ett)', 'noun (en/ett)', 'noun (plural)'
 // Hard cap on generated tokens. Keeps every auto-fill call short (fields are
 // meant to be quick reference notes, not essays) and cuts response time a lot,
 // since latency scales mostly with how many tokens the model has to generate.
-const AUTOFILL_MAX_TOKENS = 750;   // room for 5 adjective forms + Recognised/Suggestion/Verdict/Gender/Synonyms/Antonyms keys
+const AUTOFILL_MAX_TOKENS = 850;   // room for 5 adjective forms + Recognised/Suggestion/Verdict/Gender/Synonyms/Antonyms keys
 
 // Same rationale as AUTOFILL_MAX_TOKENS, sized for a 100-150 word Swedish
 // passage plus the wordsUsed array and JSON overhead.
@@ -169,15 +169,17 @@ function autofill_(word, sourceSentence, savedEntry) {
     'invent or stretch one (e.g. function words, numerals, names and most concrete nouns have no antonym);\n' +
     '"Forms": an array of the word\'s key grammatical forms, each item shaped ' +
     '{"label": string, "sv": string, "example_sv": string, "example_en": string}, built as follows:\n' +
-    '  - If Part of Speech is a noun: exactly 4 items labelled "Singular indefinite", "Singular definite", "Plural indefinite", "Plural definite" ' +
-    '(e.g. "en bil", "bilen", "bilar", "bilarna"), each with a short (max 8 word) example sentence using that exact form;\n' +
+    '  - If Part of Speech is a noun: exactly 4 items labelled "Singular", "Bestämd singular", "Plural", "Bestämd plural" ' +
+    '(e.g. "flicka", "flickan", "flickor", "flickorna"; "bil", "bilen", "bilar", "bilarna"), each with a short (max 8 word) example sentence using that exact form. ' +
+    'A noun used only in the plural (Gender "plural", e.g. "kläder") gets just the 2 plural items; a noun with no real plural gets just the 2 singular items. ' +
+    'If the typed word is itself an inflected noun form (e.g. "flickor", "flickorna", "flickan"), it is still a noun: "Dictionary Form" is the singular (e.g. "flicka") and every field describes that singular noun;\n' +
     '  - If Part of Speech is verb: exactly 4 items labelled "Infinitive", "Present", "Past", "Supine" (the four principal parts, e.g. "välja", "väljer", "valde", "valt"), ' +
     'each with a short (max 8 word) example sentence using that exact form (supine example uses "har" or "hade");\n' +
     '  - If Part of Speech is adjective: exactly 5 items labelled "Base form (en-word)", "Neuter form (ett-word)", "Plural / definite form", ' +
     '"Comparative", "Superlative" (e.g. "tyst", "tyst", "tysta", "tystare", "tystast"; irregular ones as they are, e.g. "bättre", "bäst"; ' +
     'for adjectives that only compare with "mer"/"mest", use e.g. "mer intressant"), each with a short (max 8 word) example sentence;\n' +
     '  - Otherwise (adverb, pronoun, preposition, etc.): an empty array [].\n' +
-    'The "sv" field of each form item must be ONLY the inflected word itself (no article, no extra words) so it can be matched against later, e.g. "bilar" not "en bilar". ' +
+    'The "sv" field of each form item must be ONLY the inflected word itself (no article, no extra words) so it can be matched against later, e.g. "bilar" not "en bilar", "flicka" not "en flicka". ' +
     'If the input is not a real Swedish word, still return the JSON with "Recognised" false, "English Meaning" set to "Not recognised as Swedish" and "Forms", "Synonyms" and "Antonyms" as [].' +
     (savedEntry
       ? '\nThe learner also sends an entry they SAVED earlier for this word. Compare it with your own answer and add two keys: ' +
