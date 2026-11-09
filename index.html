@@ -485,7 +485,7 @@ applyTheme(store.get('ordbok_theme', ''));
     .result-card .rc-head .sv { font-size: 30px; }
     .panel { padding: 16px; }
     dialog { width: 100%; max-width: none; max-height: 100%; height: 100%; margin: 0; border-radius: 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
-    #settings, #pinDialog { height: auto; margin: auto; border-radius: var(--radius); width: calc(100% - 32px); }
+    #settings, #loginDialog { height: auto; margin: auto; border-radius: var(--radius); width: calc(100% - 32px); }
     .pcard { padding: 24px 16px; min-height: 250px; }
     .pcard .big { font-size: 34px; }
     .pcard .big.en { font-size: 25px; }
@@ -512,6 +512,11 @@ applyTheme(store.get('ordbok_theme', ''));
   @keyframes pop { 0% { transform: scale(.85); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
   @keyframes draw { to { stroke-dashoffset: 0; } }
   @keyframes rd-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  /* Learners (everyone until the admin signs in) can browse and practise, never edit. The server enforces this too. */
+  body.role-learner #sSave, body.role-learner #sEdit, body.role-learner #sFlag, body.role-learner #sRemove,
+  body.role-learner #sManual, body.role-learner #sConnect, body.role-learner #checkBtn, body.role-learner #fillBtn,
+  body.role-learner [data-edit], body.role-learner [data-regen], body.role-learner [data-flag], body.role-learner [data-remove],
+  body.role-learner [data-action="new-passage"], body.role-learner [data-action="save-word"], body.role-learner #syncPill { display: none !important; }
 </style>
 </head>
 <body>
@@ -712,12 +717,15 @@ applyTheme(store.get('ordbok_theme', ''));
 </dialog>
 
 <dialog id="settings">
-  <h2>Connect your Google Sheet</h2>
-  <p>Paste the Web app URL from your Apps Script deployment (it ends in <b>/exec</b>). Leave it empty to stay in demo mode.</p>
-  <label for="apiUrl">Web app URL</label>
-  <input id="apiUrl" placeholder="https://script.google.com/macros/s/…/exec">
+  <h2 id="settingsTitle">Settings</h2>
+  <div id="connectBox">
+    <p>Paste the Web app URL from your Apps Script deployment (it ends in <b>/exec</b>). Leave it empty to stay in demo mode.</p>
+    <label for="apiUrl">Web app URL</label>
+    <input id="apiUrl" placeholder="https://script.google.com/macros/s/…/exec">
+  </div>
   <p class="sub" id="settingsStatus" hidden></p>
-  <button class="link" id="openPinFromSettings" type="button" hidden>Enter shared PIN</button>
+  <p class="sub" id="adminNote"></p>
+  <button class="link" id="adminAuthBtn" type="button">Admin sign in</button>
   <div id="installBox" hidden>
     <h3 style="margin:18px 0 6px;font-size:16px">Install on your phone</h3>
     <p class="sub" id="installNote"></p>
@@ -738,15 +746,17 @@ applyTheme(store.get('ordbok_theme', ''));
   </div>
 </dialog>
 
-<dialog id="pinDialog">
-  <h2>Enter the shared PIN</h2>
-  <p>Whoever shared this page with you can give you the PIN. You'll only need to enter it once on this device.</p>
-  <label for="pinInput" class="sr">PIN</label>
-  <input id="pinInput" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN">
-  <p class="msg err" id="pinMsg"></p>
+<dialog id="loginDialog">
+  <h2>Admin sign in</h2>
+  <p>Only the admin can add words and generate passages. Everyone else can browse, practise and read.</p>
+  <label for="loginUser">Username</label>
+  <input id="loginUser" autocomplete="username" autocapitalize="none" spellcheck="false">
+  <label for="loginPass">Password</label>
+  <input id="loginPass" type="password" autocomplete="current-password">
+  <p class="msg err" id="loginMsg" role="alert"></p>
   <div class="row">
-    <button id="cancelPin">Cancel</button>
-    <button class="go" id="savePin">Save</button>
+    <button id="cancelLogin" type="button">Cancel</button>
+    <button class="go" id="doLogin" type="button">Sign in</button>
   </div>
 </dialog>
 
@@ -776,9 +786,42 @@ const FLAG_TAG = 'needs-check';
 
 // `store` (guarded localStorage helpers) and applyTheme() live in the <head>
 // script so the saved theme applies before first paint.
-let apiUrl = store.get('ordbok_api_url', '');
-let appPin = store.get('ordbok_pin', '');
+// Paste your Apps Script /exec URL here so every learner opens the app already
+// connected (read-only). An admin can still override it in Settings.
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzPL-9QEKV-TgeeBCW52ZCouTroC9jw8Vn-mx7wDiU0efE3-3V3iFPp5DAB6HUjgb58_A/exec';
+let apiUrl = store.get('ordbok_api_url', '') || DEFAULT_API_URL;
 let memoryFallback = [];
+
+/* ---------- roles: learner (default) vs admin ---------- */
+// Everyone is a learner until the admin signs in with username + password. The
+// server enforces this (every write needs the signed admin token); the checks
+// below only decide what the UI offers and where progress is kept.
+let adminToken = store.get('ordbok_admin_token', '');
+let adminExp = Number(store.get('ordbok_admin_exp', '0')) || 0;
+const isAdmin = () => !!adminToken && adminExp > Date.now();
+const isLearner = () => !!apiUrl && !isAdmin();   // Demo mode (no URL) keeps its own full local behaviour
+function applyRoleClass() { document.body.classList.toggle('role-learner', isLearner()); }
+function adminOnly() { if (isLearner()) throw new Error('Only the admin can change words.'); }
+
+// Learner progress lives on this device only (the sheet's Learned / Review State
+// columns and passage progress columns are the admin's, and are ignored here).
+const LPROG_KEY = 'ordbok_learner_progress';        // { word: { L: 'Yes'|'', RS: '<json>' } }
+const LPPROG_KEY = 'ordbok_learner_passage_progress'; // { passageId: { openedWords, quizResult, writingResult, status } }
+function lprog() { const o = safeJson(store.get(LPROG_KEY, ''), {}); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; }
+function lpprog() { const o = safeJson(store.get(LPPROG_KEY, ''), {}); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; }
+function lprogSet(word, patch) {
+  const all = lprog(), k = String(word).toLowerCase();
+  all[k] = Object.assign({}, all[k], patch);
+  store.set(LPROG_KEY, JSON.stringify(all));
+}
+// Replaces the sheet's (admin) progress on fetched rows with this device's own.
+function overlayLearnerRows(rows) {
+  const all = lprog();
+  return rows.map(r => {
+    const p = all[String(r[W]).toLowerCase()] || {};
+    return Object.assign({}, r, { [L]: p.L || '', [RS]: p.RS || '' });
+  });
+}
 
 const isLearned = r => String(r[L] || '').toLowerCase() === 'yes';
 const keyOf = r => r[W].toLowerCase();
@@ -864,13 +907,15 @@ function persistRowsCache() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     if (!apiUrl || !allRowsCache) return;
-    store.set(ROWS_CACHE_KEY, JSON.stringify({ url: apiUrl, at: allRowsCacheAt, rows: allRowsCache }));
+    store.set(ROWS_CACHE_KEY, JSON.stringify({ url: apiUrl, at: allRowsCacheAt, rows: allRowsCache, learner: isLearner() }));
   }, 400);
 }
 function hydrateRowsCache() {
   if (!apiUrl) return;
   const c = safeJson(store.get(ROWS_CACHE_KEY, ''), null);
-  if (c && c.url === apiUrl && Array.isArray(c.rows)) { allRowsCache = c.rows; allRowsCacheAt = c.at || 0; }
+  // The cache is stamped with the role it was built for, so an admin's cached
+  // progress can never show up for a learner on a shared device (or vice versa).
+  if (c && c.url === apiUrl && Array.isArray(c.rows) && !!c.learner === isLearner()) { allRowsCache = c.rows; allRowsCacheAt = c.at || 0; }
 }
 // Only for "the sheet itself changed" (e.g. a different Web App URL was saved).
 function invalidateRowsCache() {
@@ -893,6 +938,7 @@ function networkFetchRows() {
     if (!data.ok) throw new Error(data.error || 'Search failed');
     // Writes still waiting in the outbox aren't on the sheet yet — lay them on top.
     let rows = data.rows;
+    if (isLearner()) return overlayLearnerRows(rows);   // their own progress, never the admin's
     for (const op of pendingOps()) rows = applyOpToRows(rows, op);
     return rows;
   })().finally(() => { rowsInflight = null; });
@@ -951,7 +997,7 @@ function passageListView_(p) {
 }
 async function apiListPassages(force) {
   if (!apiUrl) return safeJson(store.get(DEMO_PASSAGES_KEY, ''), []).map(passageListView_);
-  if (!force && allPassagesCache && (Date.now() - allPassagesCacheAt) < PASSAGES_TTL_MS) return allPassagesCache;
+  if (!force && allPassagesCache && (Date.now() - allPassagesCacheAt) < PASSAGES_TTL_MS) return overlayLearnerList_(allPassagesCache);
   const res = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'passages=1');
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || 'Could not load passages');
@@ -962,7 +1008,22 @@ async function apiListPassages(force) {
   // callers `undefined` (which used to crash renderLibraryGrid()).
   if (!Array.isArray(data.passages)) throw new Error('This Google Sheet’s script needs updating to the latest code.gs to support reading passages.');
   allPassagesCache = data.passages; allPassagesCacheAt = Date.now();
-  return allPassagesCache;
+  return overlayLearnerList_(allPassagesCache);
+}
+// Learners see their own passage progress (opened words, quiz score, writing),
+// not the admin's that the sheet carries. The cache itself stays untouched.
+function overlayLearnerList_(list) {
+  if (!isLearner()) return list;
+  const all = lpprog();
+  return list.map(p => {
+    const lp = all[p.Id] || {};
+    return Object.assign({}, p, {
+      OpenedCount: (lp.openedWords || []).length,
+      QuizResult: lp.quizResult ? JSON.stringify(lp.quizResult) : '',
+      Written: !!lp.writingResult,
+      Status: lp.status || (p.Status === 'archived' ? 'archived' : ''),
+    });
+  });
 }
 async function apiGetPassage(id) {
   if (!apiUrl) {
@@ -973,6 +1034,16 @@ async function apiGetPassage(id) {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || 'Passage not found');
   if (!data.passage || typeof data.passage !== 'object') throw new Error('This Google Sheet’s script needs updating to the latest code.gs to support reading passages.');
+  if (isLearner()) {
+    const lp = lpprog()[data.passage[PID]] || {};
+    const st = data.passage[PSTATUS];
+    Object.assign(data.passage, {
+      [POPENED]: JSON.stringify(lp.openedWords || []),
+      [PQUIZRESULT]: lp.quizResult ? JSON.stringify(lp.quizResult) : '',
+      [PWRESULT]: lp.writingResult ? JSON.stringify(lp.writingResult) : '',
+      [PSTATUS]: lp.status || (st === 'archived' ? 'archived' : ''),
+    });
+  }
   return data.passage;
 }
 // No demo-mode fallback: Demo mode has no AI auto-fill (see apiSave et al.
@@ -980,6 +1051,7 @@ async function apiGetPassage(id) {
 // state points at Settings instead of calling this.
 async function apiGeneratePassage(words, level, signal, opts) {
   if (!apiUrl) throw new Error('Connect a Google Sheet to generate reading passages.');
+  adminOnly();
   const o = opts || {};
   const data = await post({ action: 'generatePassage', words, level, theme: o.theme || '', length: o.length || 'medium', count: o.count || words.length }, false, signal);
   invalidatePassagesCache();
@@ -996,6 +1068,12 @@ async function apiCheckWriting(answers, level) {
 // either mode uses; never touches paragraphs/targets/quiz themselves.
 async function apiUpdatePassage(id, patch) {
   if (!apiUrl) { demoUpdatePassage_(id, patch); return; }
+  if (isLearner()) {   // learners keep passage progress on this device only
+    const all = lpprog();
+    all[id] = Object.assign({}, all[id], patch);
+    store.set(LPPROG_KEY, JSON.stringify(all));
+    return;
+  }
   await post({ action: 'updatePassage', id, patch });
   invalidatePassagesCache();
 }
@@ -1028,25 +1106,48 @@ function findExistingRow(rows, word, exceptWord) {
   return null;
 }
 
-// Opens the PIN dialog and resolves with the entered PIN, or null if cancelled.
-function askPin(errorText) {
+// Admin sign-in. Opens the dialog and resolves true once the server accepts the
+// username + password (the dialog stays open and shows errors inline), or false
+// if cancelled. The signed token replaces the old shared PIN.
+function setAdminSession(token, exp) {
+  adminToken = token; adminExp = Number(exp) || (Date.now() + 29 * 86400000);
+  store.set('ordbok_admin_token', adminToken); store.set('ordbok_admin_exp', String(adminExp));
+  applyRoleClass();
+}
+function clearAdminSession() {
+  adminToken = ''; adminExp = 0;
+  store.remove('ordbok_admin_token'); store.remove('ordbok_admin_exp');
+  applyRoleClass();
+}
+function askAdminLogin(errorText) {
   return new Promise(resolve => {
-    $('pinMsg').textContent = errorText || '';
-    $('pinInput').value = '';
-    $('pinDialog').showModal();
-    $('pinInput').focus();
-    const cleanup = () => {
-      $('pinDialog').close();
-      $('savePin').removeEventListener('click', onSave);
-      $('cancelPin').removeEventListener('click', onCancel);
-      $('pinInput').removeEventListener('keydown', onKey);
+    const dlg = $('loginDialog'), msg = $('loginMsg'), go = $('doLogin');
+    msg.textContent = errorText || '';
+    $('loginPass').value = '';
+    if (!dlg.open) dlg.showModal();
+    ($('loginUser').value ? $('loginPass') : $('loginUser')).focus();
+    const cleanup = ok => {
+      dlg.close();
+      go.removeEventListener('click', onGo); $('cancelLogin').removeEventListener('click', onCancel);
+      dlg.removeEventListener('keydown', onKey); dlg.removeEventListener('cancel', onCancel);
+      resolve(ok);
     };
-    const onSave = () => { const v = $('pinInput').value.trim(); cleanup(); resolve(v); };
-    const onCancel = () => { cleanup(); resolve(null); };
-    const onKey = e => { if (e.key === 'Enter') { e.preventDefault(); onSave(); } };
-    $('savePin').addEventListener('click', onSave);
-    $('cancelPin').addEventListener('click', onCancel);
-    $('pinInput').addEventListener('keydown', onKey);
+    const onCancel = () => cleanup(false);
+    const onKey = e => { if (e.key === 'Enter') { e.preventDefault(); onGo(); } };
+    const onGo = async () => {
+      if (go.disabled) return;
+      go.disabled = true; msg.textContent = '';
+      try {
+        const res = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'login', username: $('loginUser').value.trim(), password: $('loginPass').value }) });
+        const d = await res.json();
+        if (d.ok && d.token) { setAdminSession(d.token, d.expires); $('loginPass').value = ''; cleanup(true); return; }
+        msg.textContent = d.error || 'Sign-in failed';
+      } catch (e) { msg.textContent = 'Could not reach the server. Check your connection.'; }
+      go.disabled = false; $('loginPass').select();
+    };
+    go.addEventListener('click', onGo); $('cancelLogin').addEventListener('click', onCancel);
+    dlg.addEventListener('keydown', onKey); dlg.addEventListener('cancel', onCancel);
   });
 }
 // `signal` is optional and new (added for apiGeneratePassage's Cancel
@@ -1058,15 +1159,14 @@ function askPin(errorText) {
 // instead, since most requests here are cheap enough not to need a real abort.
 async function post(body, isRetry, signal) {
   // text/plain avoids a CORS preflight, which Apps Script cannot answer
-  const payload = appPin ? Object.assign({}, body, { pin: appPin }) : body;
+  const payload = isAdmin() ? Object.assign({}, body, { token: adminToken }) : body;
   const res = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), signal });
   const data = await res.json();
-  if (!data.ok && /pin/i.test(data.error || '') && !isRetry) {
-    const entered = await askPin(data.error === 'Incorrect PIN' ? 'That PIN was not correct. Try again.' : '');
-    if (entered == null) throw new Error(data.error || 'Request failed');
-    appPin = entered; store.set('ordbok_pin', appPin);
-    renderModePill();
-    return post(body, true, signal);
+  if (!data.ok && /admin sign-in/i.test(data.error || '') && !isRetry) {
+    // The server no longer accepts our session (expired / secret changed): sign in again, then retry once.
+    clearAdminSession();
+    if (await askAdminLogin('Please sign in again.')) { renderModePill(); return post(body, true, signal); }
+    throw new Error(data.error || 'Request failed');
   }
   if (!data.ok) throw new Error(data.error || 'Request failed');
   return data;
@@ -1159,7 +1259,7 @@ function enqueueWrite(type, word, wire) {
 }
 function classifyWriteError(e) {
   const msg = (e && e.message) || '';
-  if (/pin/i.test(msg)) return { ok: false, pause: true };
+  if (/admin sign-in|only the admin/i.test(msg)) return { ok: false, pause: true };
   if (/not found/i.test(msg)) return { ok: true };                 // word already gone: nothing left to sync
   if (e instanceof TypeError || /failed to fetch|networkerror|load failed|network request/i.test(msg)) return { ok: false, network: true };
   return { ok: false };
@@ -1182,7 +1282,7 @@ async function sendOpChunk(chunk) {
   return out;
 }
 async function flushOutbox() {
-  if (!apiUrl || outboxBusy || outboxPaused) return;
+  if (!apiUrl || outboxBusy || outboxPaused || !isAdmin()) return;   // writes only ever go out as the signed-in admin
   if (!pendingOps().length) { renderSyncPill(); return; }
   if (navigator.onLine === false) { renderSyncPill(); return; }
   outboxBusy = true; clearTimeout(outboxTimer); renderSyncPill();
@@ -1216,7 +1316,7 @@ async function flushOutbox() {
 function renderSyncPill() {
   const p = $('syncPill'); if (!p) return;
   const n = pendingOps().length;
-  if (!apiUrl || (!n && !outboxLost)) { p.hidden = true; return; }
+  if (!apiUrl || !isAdmin() || (!n && !outboxLost)) { p.hidden = true; return; }
   p.hidden = false;
   const stalled = outboxPaused || outboxFails > 0 || navigator.onLine === false;
   p.classList.toggle('warn', stalled || !!outboxLost);
@@ -1225,6 +1325,7 @@ function renderSyncPill() {
 }
 
 async function apiSave(row) {
+  adminOnly();
   row[W] = row[W].toLowerCase();   // canonical, case-insensitive storage key
   if (!apiUrl) {
     const { rows, action } = applySaveToRows(localRows(), row);
@@ -1246,6 +1347,11 @@ async function apiSetLearned(word, val) {
     if (r) { r[L] = val ? 'Yes' : ''; saveLocalRows(rows); }
     return;
   }
+  if (isLearner()) {   // this device only
+    lprogSet(word, { L: val ? 'Yes' : '' });
+    cacheMutate(rows => rows.map(r => r[W].toLowerCase() === word.toLowerCase() ? Object.assign({}, r, { [L]: val ? 'Yes' : '' }) : r));
+    return;
+  }
   const wire = { action: 'setLearned', word, learned: !!val };
   cacheMutate(rows => applyOpToRows(rows, { type: 'learned', word, wire }));
   enqueueWrite('learned', word, wire);
@@ -1262,9 +1368,11 @@ async function apiUpdateReview(word, state) {
   writeEpoch++;
   const r = allRowsCache && allRowsCache.find(x => x[W].toLowerCase() === word.toLowerCase());
   if (r) { r[RS] = stateStr; persistRowsCache(); }
+  if (isLearner()) { lprogSet(word, { RS: stateStr }); return; }   // this device only, never the outbox
   enqueueWrite('review', word, { action: 'updateReview', word, reviewState: stateStr });
 }
 async function apiDelete(word) {
+  adminOnly();
   if (!apiUrl) {
     saveLocalRows(localRows().filter(x => x[W].toLowerCase() !== word.toLowerCase()));
     return;
@@ -1487,11 +1595,16 @@ function speak(word) {
 }
 function renderModePill() {
   const p = $('modePill');
-  p.textContent = apiUrl ? 'Connected to Google Sheet' : 'Demo mode: saved in this browser';
   p.classList.toggle('live', !!apiUrl);
-  $('openPinFromSettings').hidden = !apiUrl;
-  $('checkBtn').hidden = !apiUrl;          // the check needs the AI backend
-  $('openPinFromSettings').textContent = appPin ? 'Change PIN' : 'Enter shared PIN';
+  applyRoleClass();
+  const learner = isLearner();
+  p.textContent = !apiUrl ? 'Demo mode: saved in this browser' : learner ? 'Learner · progress saved on this device' : 'Admin · connected to Google Sheet';
+  $('connectBox').hidden = learner;          // learners never see or change the sheet URL
+  $('settingsTitle').textContent = learner ? 'Settings' : 'Connect your Google Sheet';
+  $('adminAuthBtn').hidden = !apiUrl;        // sign-in needs a backend to sign in to
+  $('adminAuthBtn').textContent = isAdmin() ? 'Sign out of admin' : 'Admin sign in';
+  $('adminNote').textContent = learner ? '' : isAdmin() ? 'You are signed in as admin: you can add words and generate passages.' : '';
+  $('checkBtn').hidden = !apiUrl || learner;   // the check needs the AI backend (admin only)
   refreshModelInfo();
 }
 async function refreshModelInfo() {
@@ -1586,6 +1699,11 @@ async function lookupWord(word) {
     if (hit) {
       showSavedCard(hit, hit[W].toLowerCase() !== q.toLowerCase() ? 'You searched “' + q + '” — saved as “' + hit[W] + '”.' : '');
       setSMsg('');
+      return;
+    }
+    if (isLearner()) {   // learners only browse the shared list: no AI lookup, nothing to add
+      setSMsg('“' + q + '” isn’t in the word list yet.');
+      showSearchExtras([]);
       return;
     }
     if (!apiUrl) {
@@ -2140,6 +2258,7 @@ function migrateDemoPassages_() {
 // (still the pre-rewrite version, as of this phase) in the meantime.
 async function migratePassagesIfNeeded() {
   if (!apiUrl) { migrateDemoPassages_(); return; }
+  if (isLearner()) return;   // uploading legacy history is a write: admin only
   if (store.get(PASSAGES_MIGRATED_KEY, '')) return;
   try { await migrateConnectedPassages_(); } catch (e) { /* retry on next launch */ }
 }
@@ -2246,7 +2365,7 @@ function enterReadTab() {
     pushReadState('#read/' + encodeURIComponent(R.current.id) + '/write'); renderReadWrite();
   }
   else if (R.screen === 'results' && R.current) backToReading();   // mid-results on tab-away/back: just resume reading
-  else if (R.screen === 'setup' && apiUrl) goToSetup();
+  else if (R.screen === 'setup' && apiUrl && !isLearner()) goToSetup();
   else goToLibrary();
 }
 function goToLibrary(push) {
@@ -2255,7 +2374,7 @@ function goToLibrary(push) {
   renderReadLibrary();
 }
 function goToSetup(push) {
-  if (!apiUrl) { goToLibrary(push); return; }   // generation needs Connected mode
+  if (!apiUrl || isLearner()) { goToLibrary(push); return; }   // generation needs Connected mode and the admin
   R.screen = 'setup';
   if (push !== false) pushReadState('#read/new');
   renderReadSetup();
@@ -2757,6 +2876,9 @@ async function openWordPanel(word, pidx, btnEl) {
   } else if (!apiUrl) {
     panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word, ctxSentence) +
       '<p class="rd-lib-sub">Not in your words yet. Connect a Google Sheet to look it up and save it — see Settings.</p>';
+  } else if (isLearner()) {
+    panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word, ctxSentence) +
+      '<p class="rd-lib-sub">Not in the word list yet.</p>';
   } else {
     panel.innerHTML = closeBtn + '<div lang="sv" class="rd-panel-word">' + esc(word) + '</div>' + listenBtnHtml(word, ctxSentence) +
       '<p class="rd-lib-sub">Not in your words yet.</p>' +
@@ -3705,12 +3827,17 @@ $('testVoice').addEventListener('click', () => speechSay('Hej! Så här låter j
 $('cancelSettings').addEventListener('click', () => { speechStop(); $('settings').close(); });
 $('saveSettings').addEventListener('click', () => {
   const newUrl = $('apiUrl').value.trim();
-  if (newUrl !== apiUrl) { apiUrl = newUrl; store.set('ordbok_api_url', apiUrl); invalidateRowsCache(); hydrateRowsCache(); batchUnsupported = false; outboxPaused = false; }
+  if (!isLearner() && newUrl !== apiUrl) { apiUrl = newUrl; store.set('ordbok_api_url', apiUrl); invalidateRowsCache(); hydrateRowsCache(); batchUnsupported = false; outboxPaused = false; }
   $('settings').close(); renderModePill(); renderSyncPill(); refreshCurrentView(); flushOutbox();
 });
-$('openPinFromSettings').addEventListener('click', async () => {
-  const entered = await askPin();
-  if (entered != null) { appPin = entered; store.set('ordbok_pin', appPin); renderModePill(); }
+$('adminAuthBtn').addEventListener('click', async () => {
+  if (isAdmin()) {
+    clearAdminSession(); invalidateRowsCache();      // drop the admin's cached progress
+    location.reload();
+    return;
+  }
+  $('settings').close();
+  if (await askAdminLogin()) { invalidateRowsCache(); location.reload(); }   // reload so rows/passages load as admin
 });
 
 outbox = safeJson(store.get(OUTBOX_KEY, ''), []);

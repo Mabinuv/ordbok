@@ -6,11 +6,15 @@
  * 2. Project Settings (gear) > Script properties > add the key for your provider:
  *      OPENAI_API_KEY = sk-...            (when PROVIDER = 'openai')
  *      GEMINI_API_KEY = ...               (when PROVIDER = 'gemini')
- * 3. OPTIONAL — shared PIN, worth setting once this is on a public URL: add
- *      APP_PIN = 1234                     (any digits/letters you like)
- *    Every save, edit and auto-fill request must then include this PIN; search
- *    stays open to anyone with the link. Leave APP_PIN unset to require no PIN
- *    at all (fine for a private/personal deployment).
+ * 3. ADMIN LOGIN (required for any write). Add three script properties:
+ *      ADMIN_USER = your username
+ *      ADMIN_PASSWORD = a long password
+ *      SESSION_SECRET = a long random string (signs the login token)
+ *    Anyone with the link can READ words and passages (learners; their progress
+ *    stays on their own device). Only a signed-in admin can add/edit/delete
+ *    words, generate passages or use AI auto-fill. With these unset, all writes
+ *    are refused. (Legacy: APP_PIN is still accepted as an admin credential
+ *    until the new frontend is deployed; remove it afterwards.)
  * 4. Deploy > New deployment > Web app. Execute as: Me. Who has access: Anyone.
  *    (Later code changes: Deploy > Manage deployments > pencil > Version: New version.)
  * 5. Paste the /exec URL into the web app's "Connect Google Sheet" panel.
@@ -793,6 +797,111 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// ---------------------------------------------------------------------------
+// Admin authentication. Learners need no login (they only read; their progress
+// lives on their own device). The admin signs in with ADMIN_USER/ADMIN_PASSWORD
+// (Script Properties) and gets a signed, expiring session token that every
+// write request carries. Fails CLOSED: with nothing configured, all writes are
+// refused.
+// ---------------------------------------------------------------------------
+const SESSION_DAYS = 30;
+const LOGIN_MAX_FAILS = 5;          // failed logins allowed ...
+const LOGIN_WINDOW_SECONDS = 900;   // ... per 15 minutes (global; Apps Script has no client IP)
+const WRITING_CHECKS_PER_DAY = 100; // learner checkWriting calls per day, in total
+
+function props_() { return PropertiesService.getScriptProperties(); }
+
+// Compare without bailing out on the first differing character.
+function safeEqual_(a, b) {
+  a = String(a); b = String(b);
+  let diff = a.length ^ b.length;
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
+}
+
+function sign_(payload) {
+  const secret = props_().getProperty('SESSION_SECRET');
+  const sig = Utilities.computeHmacSha256Signature(payload, secret);
+  return Utilities.base64EncodeWebSafe(sig);
+}
+
+function makeToken_() {
+  const exp = Date.now() + SESSION_DAYS * 86400000;
+  const payload = Utilities.base64EncodeWebSafe(JSON.stringify({ role: 'admin', exp: exp }));
+  return payload + '.' + sign_(payload);
+}
+
+function tokenValid_(token) {
+  const secret = props_().getProperty('SESSION_SECRET');
+  if (!secret || !token) return false;
+  const parts = String(token).split('.');
+  if (parts.length !== 2) return false;
+  if (!safeEqual_(sign_(parts[0]), parts[1])) return false;
+  try {
+    const body = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString());
+    return body.role === 'admin' && Number(body.exp) > Date.now();
+  } catch (err) {
+    return false;
+  }
+}
+
+// Valid admin token, or (rollout fallback) the legacy shared PIN.
+function isAdmin_(data) {
+  if (tokenValid_(data.token)) return true;
+  const pin = props_().getProperty('APP_PIN');
+  return !!(pin && data.pin && safeEqual_(String(data.pin).trim(), pin));
+}
+
+// null when allowed, else the error string the client reacts to.
+function adminAuthError_(data) {
+  if (isAdmin_(data)) return null;
+  const p = props_();
+  if (!p.getProperty('ADMIN_PASSWORD') && !p.getProperty('APP_PIN')) {
+    return 'Admin login is not set up (add ADMIN_USER, ADMIN_PASSWORD and SESSION_SECRET in Script Properties)';
+  }
+  return data.token || data.pin ? 'Admin sign-in expired' : 'Admin sign-in required';
+}
+
+function login_(username, password) {
+  const p = props_();
+  const user = p.getProperty('ADMIN_USER');
+  const pass = p.getProperty('ADMIN_PASSWORD');
+  if (!user || !pass || !p.getProperty('SESSION_SECRET')) {
+    return { ok: false, error: 'Admin login is not set up (add ADMIN_USER, ADMIN_PASSWORD and SESSION_SECRET in Script Properties)' };
+  }
+  const cache = CacheService.getScriptCache();
+  const fails = Number(cache.get('login_fails') || 0);
+  if (fails >= LOGIN_MAX_FAILS) {
+    return { ok: false, error: 'Too many attempts. Try again in a few minutes.' };
+  }
+  // Evaluate both (no short-circuit) so timing doesn't reveal which was wrong.
+  const userOk = safeEqual_(String(username || '').trim(), user);
+  const passOk = safeEqual_(String(password || ''), pass);
+  if (!(userOk && passOk)) {
+    cache.put('login_fails', String(fails + 1), LOGIN_WINDOW_SECONDS);
+    return { ok: false, error: 'Wrong username or password' };
+  }
+  cache.remove('login_fails');
+  return { ok: true, token: makeToken_(), expires: Date.now() + SESSION_DAYS * 86400000 };
+}
+
+// Daily cap on learner (non-admin) checkWriting calls so a stranger can't burn
+// the AI key. Returns an error string when the cap is hit, else null.
+function takeWritingBudget_(lock) {
+  lock.waitLock(5000);
+  try {
+    const p = props_();
+    const today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
+    let count = p.getProperty('CW_DAY') === today ? Number(p.getProperty('CW_COUNT') || 0) : 0;
+    if (count >= WRITING_CHECKS_PER_DAY) return 'Writing check is busy today. Please try again tomorrow.';
+    p.setProperties({ CW_DAY: today, CW_COUNT: String(count + 1) });
+    return null;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // Reads every row from the sheet. Backed by a short-lived cache (see
 // SEARCH_CACHE_SECONDS) because the Sheets read is what makes search feel
 // slow — a full sheet scan happens at most once every ~50s per cache slot
@@ -1191,12 +1300,20 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
 
-    const requiredPin = PropertiesService.getScriptProperties().getProperty('APP_PIN');
-    if (requiredPin) {
-      const given = String(data.pin || '').trim();
-      if (!given) return json_({ ok: false, error: 'PIN required' });
-      if (given !== requiredPin) return json_({ ok: false, error: 'Incorrect PIN' });
+    // ---- Access control -------------------------------------------------
+    // Two actions are open to everyone: `login` (throttled) and `checkWriting`
+    // (learners' Read tab; capped per day). Every other POST needs an admin
+    // session token (or, during rollout, the legacy APP_PIN).
+    if (data.action === 'login') return json_(login_(data.username, data.password));
+    if (data.action === 'checkWriting') {
+      if (!isAdmin_(data)) {
+        const capErr = takeWritingBudget_(lock);
+        if (capErr) return json_({ ok: false, error: capErr });
+      }
+      return json_(checkWriting_(data.answers, data.level));
     }
+    const authErr = adminAuthError_(data);
+    if (authErr) return json_({ ok: false, error: authErr });
 
     if (data.action === 'autofill') {
       const savedEntry = data.savedEntry && typeof data.savedEntry === 'object' ? data.savedEntry : null;
@@ -1230,10 +1347,7 @@ function doPost(e) {
     // write, so — same pattern as importPassage just above — this action
     // acquires the lock itself only for the append step, and returns before
     // ever reaching the Words-sheet lock/getSheet_() call below.
-    // Unlocked LLM call (like autofill): marks the learner's written answers.
-    if (data.action === 'checkWriting') {
-      return json_(checkWriting_(data.answers, data.level));
-    }
+    // (checkWriting is handled above, before the admin gate.)
 
     if (data.action === 'generatePassage') {
       const words = Array.isArray(data.words) ? data.words : [];
