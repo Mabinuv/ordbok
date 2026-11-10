@@ -130,6 +130,7 @@ applyTheme(store.get('ordbok_theme', ''));
   .gender-pre[data-g="en"] { color: var(--c-en); }
   .gender-pre[data-g="ett"] { color: var(--c-ett); }
   .tag-chip { color: var(--muted); border-color: var(--line); background: var(--bg); font-weight: 500; }
+  .tag-chip.dict-ok { color: var(--c-verb); }
   .badge { margin-bottom: 8px; }
   .badge.ok { color: var(--ok); }
   .badge.new, .badge.saved { color: var(--on-highlight); background: var(--highlight); border-color: var(--highlight); }
@@ -783,6 +784,17 @@ const THEME_ICONS = {
   dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
 };
 const FLAG_TAG = 'needs-check';
+// Result of the Språkbanken dictionary cross-check, stored as a plain tag (no sheet column).
+const DICT_TAGS = { verified: 'dict-verified', corrected: 'dict-corrected', unverified: 'dict-unverified' };
+const DICT_TAG_LIST = Object.values(DICT_TAGS);
+const DICT_TAG_LABEL = { 'dict-verified': '✓ Dictionary-checked', 'dict-corrected': '✓ Corrected from dictionary', 'dict-unverified': 'Not in dictionary' };
+// Replaces any dict-* tag in a comma-separated tag string with the one for verify.status.
+// No verify / "unavailable" leaves the tags exactly as they were.
+function setDictTag(tagsString, verify) {
+  const tag = verify && DICT_TAGS[verify.status];
+  if (!tag) return String(tagsString || '');
+  return parseTags(tagsString).filter(t => DICT_TAG_LIST.indexOf(t) === -1).concat([tag]).join(', ');
+}
 
 // `store` (guarded localStorage helpers) and applyTheme() live in the <head>
 // script so the saved theme applies before first paint.
@@ -1507,7 +1519,9 @@ function entryBodyHtml(r) {
     ${related}
     ${forms ? `<div class="forms"><h3>Forms</h3>${forms}</div>` : ''}
     ${seen.length ? `<p class="seen">Seen as: ${esc(seen.join(', '))}</p>` : ''}
-    ${tags.length ? `<div class="tags">${tags.map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}`;
+    ${tags.length ? `<div class="tags">${tags.map(t => DICT_TAG_LABEL[t]
+      ? `<span class="tag-chip ${t === 'dict-unverified' ? '' : 'dict-ok'}" title="Cross-checked against Språkbanken's dictionaries">${esc(DICT_TAG_LABEL[t])}</span>`
+      : `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}`;
 }
 
 /* ---------- speech engine (browser text-to-speech, no cost) ----------
@@ -1746,6 +1760,7 @@ async function lookupWord(word) {
     relatedFromAi(row, f);
     row[W] = lemma;
     row[GF] = JSON.stringify(parseForms(f[GF]));
+    row[TAGS] = setDictTag('', data.verify);
     if (isForm) row[SEEN] = JSON.stringify([q.toLowerCase()]);
     pendingRow = row;
     showSearchCard(row, { kind: 'new', label: 'Not in your sheet · AI suggestion' },
@@ -2034,6 +2049,8 @@ async function autofill() {
     $('f_ant').value = String((data.fields && data.fields.Antonyms) || '').trim();
     currentForms = parseForms(data.fields && data.fields[GF]);
     renderFormsPreview();
+    // Record the dictionary cross-check on the word (stored when the user presses Save).
+    $('f_tags').value = setDictTag($('f_tags').value, data.verify);
     // The AI normalises the headword to its dictionary form (e.g. "gick" -> "gå").
     // If that differs from what was typed, switch the word field to it and
     // remember the typed form as a "seen as" entry so search still finds it.
@@ -2045,6 +2062,7 @@ async function autofill() {
     } else {
       setMsg(verifyNote(data.verify), 'ok');
     }
+    try { $('addMsg').scrollIntoView({ block: 'nearest' }); } catch (e) {}
   } catch (e) {
     setMsg('Couldn’t regenerate right now (' + e.message + '). Try again, or edit the fields yourself.', 'err');
   } finally { btn.disabled = false; btn.textContent = 'Regenerate with AI'; }
@@ -2935,6 +2953,7 @@ async function saveWordFromPanel(word, pidx) {
     relatedFromAi(row, f);
     row[W] = finalLemma;
     row[GF] = JSON.stringify(parseForms(f[GF]));
+    row[TAGS] = setDictTag('', data.verify);
     if (finalLemma.toLowerCase() !== word.toLowerCase()) row[SEEN] = JSON.stringify([word.toLowerCase()]);
     await apiSave(row);
     refreshDueLine();
@@ -3364,7 +3383,7 @@ function buildFixedRow(old, f) {
   if (!row[ANT]) row[ANT] = String(f.Antonyms || '').trim();
   const lemma = String(f['Dictionary Form'] || '').trim() || old[W];
   row[W] = lemma;
-  row[TAGS] = parseTags(old[TAGS]).filter(t => t !== FLAG_TAG).join(', ');
+  row[TAGS] = setDictTag(parseTags(old[TAGS]).filter(t => t !== FLAG_TAG).join(', '), f._verify);
   row[GF] = JSON.stringify(parseForms(f[GF]));
   if (lemma.toLowerCase() !== old[W].toLowerCase()) {
     row.previousWord = old[W];
@@ -3455,6 +3474,7 @@ async function runCheck() {
         }
         const data = await post({ action: 'autofill', word: r[W], sourceSentence: r[SRC] || '', savedEntry: savedEntryOf(r) });
         const f = data.fields || {};
+        f._verify = data.verify;
         const bad = notRecognised(f);
         if (!CK.stop && (bad || String(f.Verdict || '').toLowerCase() === 'fix')) {
           CK.results.push({ old: r, f, bad });
