@@ -1641,7 +1641,8 @@ function renderModePill() {
 }
 // ---- AI usage / estimated cost (admin only; the server tracks every LLM call, see trackLlm_ in code.gs) ----
 const USAGE_LABELS = { autofill: 'Word lookups', reading: 'Reading', passage: 'Passages', writing: 'Writing checks' };
-const fmtUsd = c => '$' + (c > 0 && c < 0.01 ? c.toFixed(4) : c.toFixed(2));
+// Whole cents (e.g. $0.07); anything under one cent reads "<$0.01" instead of long decimals.
+const fmtUsd = c => c > 0 && c < 0.01 ? '<$0.01' : '$' + c.toFixed(2);
 async function refreshUsage() {
   const box = $('usageBox');
   box.hidden = !(apiUrl && isAdmin());
