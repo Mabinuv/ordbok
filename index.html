@@ -130,7 +130,11 @@ applyTheme(store.get('ordbok_theme', ''));
   .gender-pre[data-g="en"] { color: var(--c-en); }
   .gender-pre[data-g="ett"] { color: var(--c-ett); }
   .tag-chip { color: var(--muted); border-color: var(--line); background: var(--bg); font-weight: 500; }
-  .tag-chip.dict-ok { color: var(--c-verb); }
+  /* Dictionary cross-check line: sits under the word in every view (cards, list entries, Read panel, edit dialog). */
+  .verify-line { display: flex; align-items: flex-start; gap: 6px; color: var(--muted); font-size: 14px; margin: 8px 0 0; }
+  .verify-line svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+  .verify-line.ok svg { color: var(--c-verb); }
+  .verify-line.warn svg { color: var(--c-adj); }
   .badge { margin-bottom: 8px; }
   .badge.ok { color: var(--ok); }
   .badge.new, .badge.saved { color: var(--on-highlight); background: var(--highlight); border-color: var(--highlight); }
@@ -654,6 +658,7 @@ applyTheme(store.get('ordbok_theme', ''));
   <textarea id="f_source" placeholder="e.g. a sentence from a book, or “at work”"></textarea>
   <div class="fillrow">
     <button class="secondary" id="fillBtn" type="button">Regenerate with AI</button>
+    <div id="verifyBox" aria-live="polite"></div>
   </div>
 
   <div id="fields">
@@ -787,7 +792,7 @@ const FLAG_TAG = 'needs-check';
 // Result of the Språkbanken dictionary cross-check, stored as a plain tag (no sheet column).
 const DICT_TAGS = { verified: 'dict-verified', corrected: 'dict-corrected', unverified: 'dict-unverified' };
 const DICT_TAG_LIST = Object.values(DICT_TAGS);
-const DICT_TAG_LABEL = { 'dict-verified': '✓ Dictionary-checked', 'dict-corrected': '✓ Corrected from dictionary', 'dict-unverified': 'Not in dictionary' };
+const DICT_TAG_LABEL = { 'dict-verified': 'Dictionary-checked', 'dict-corrected': 'Corrected from dictionary', 'dict-unverified': 'Not in dictionary' };
 // Replaces any dict-* tag in a comma-separated tag string with the one for verify.status.
 // No verify / "unavailable" leaves the tags exactly as they were.
 function setDictTag(tagsString, verify) {
@@ -1506,22 +1511,23 @@ function nounFormsHtml(r) {
       (f.example_sv ? `<div class="ex"><span class="s" lang="sv">${esc(f.example_sv)}</span>${f.example_en ? '<span class="e">' + esc(f.example_en) + '</span>' : ''}</div>` : '') + '</div>';
   }).join('') + '</div>';
 }
-function entryBodyHtml(r) {
+// `verify` (optional): a fresh {kind,text} from freshVerify(); otherwise the line is
+// built from the word's stored dict-* tag. Same line, same spot (under the word) everywhere.
+function entryBodyHtml(r, verify) {
   const forms = nounFormsHtml(r) || formsTableHtml(parseForms(r[GF]));
-  const seen = parseSeenAs(r[SEEN]), tags = parseTags(r[TAGS]);
+  const seen = parseSeenAs(r[SEEN]), tags = parseTags(r[TAGS]).filter(t => DICT_TAG_LIST.indexOf(t) === -1);
   const relRow = (label, list) => list.length
     ? `<div class="rel"><h3>${label}</h3>${list.map(w => `<button type="button" class="rel-chip" data-rel="${esc(w)}" lang="sv">${esc(w)}</button>`).join('')}</div>` : '';
   const related = relRow('Synonyms', parseWordList(r[SYN])) + relRow('Antonyms (motsatser)', parseWordList(r[ANT]));
   return `
+    ${verifyLineHtml(verify || dictStatusOf(r))}
     ${r[PR] ? `<div class="ipa">${esc(r[PR])}</div>` : ''}
     <p class="en">${esc(r[EN])}</p>
     ${(r[XS] || r[XE]) ? `<p class="ex"><span class="s" lang="sv">${esc(r[XS])}</span><span class="e">${esc(r[XE])}</span></p>` : ''}
     ${related}
     ${forms ? `<div class="forms"><h3>Forms</h3>${forms}</div>` : ''}
     ${seen.length ? `<p class="seen">Seen as: ${esc(seen.join(', '))}</p>` : ''}
-    ${tags.length ? `<div class="tags">${tags.map(t => DICT_TAG_LABEL[t]
-      ? `<span class="tag-chip ${t === 'dict-unverified' ? '' : 'dict-ok'}" title="Cross-checked against Språkbanken's dictionaries">${esc(DICT_TAG_LABEL[t])}</span>`
-      : `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}`;
+    ${tags.length ? `<div class="tags">${tags.map(t => `<span class="tag-chip">${esc(t)}</span>`).join('')}</div>` : ''}`;
 }
 
 /* ---------- speech engine (browser text-to-speech, no cost) ----------
@@ -1658,7 +1664,7 @@ function hideSearchResult() {
   cardRow = null;
 }
 // kind: 'new' (AI suggestion, can Save) | 'saved' (a saved row: Edit/Flag/Remove)
-function showSearchCard(r, badge, note, kind) {
+function showSearchCard(r, badge, note, kind, verify) {
   $('sCard').dataset.pos = posClass(r[POS]);
   $('sResult').innerHTML = `
     <span class="badge ${badge.kind}" id="sBadge">${esc(badge.label)}</span>
@@ -1668,7 +1674,7 @@ function showSearchCard(r, badge, note, kind) {
     </div>
     <div class="meta">${posChipHtml(r)}</div>
     ${note ? `<p class="rc-note">${esc(note)}</p>` : ''}
-    ${entryBodyHtml(r)}`;
+    ${entryBodyHtml(r, verify)}`;
   $('sSave').hidden = kind !== 'new';
   ['sEdit', 'sFlag', 'sRemove'].forEach(id => $(id).hidden = kind !== 'saved');
   cardRow = kind === 'saved' ? r : null;
@@ -1694,13 +1700,32 @@ function notRecognised(f) {
   return f.Recognised === false || String(f.Recognised).toLowerCase() === 'false' ||
     /^not recognised as swedish/i.test(String(f['English Meaning'] || ''));
 }
+const ICON_INFO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>';
+// The one renderer for the dictionary cross-check line. v = {kind:'ok'|'warn', text} or null.
+function verifyLineHtml(v) {
+  if (!v || !v.text) return '';
+  return `<p class="verify-line ${v.kind === 'ok' ? 'ok' : 'warn'}">${v.kind === 'ok' ? ICON_CHECK : ICON_INFO}<span>${esc(v.text)}</span></p>`;
+}
+// From a fresh lookup (data.verify): the detailed text with sources and level.
+function freshVerify(v) {
+  const text = verifyNote(v);
+  return text ? { kind: v.status === 'verified' || v.status === 'corrected' ? 'ok' : 'warn', text } : null;
+}
+// From a saved word's dict-* tag: status only. null when the word was never cross-checked.
+function dictStatusOf(r) {
+  const t = parseTags(r && r[TAGS]).find(x => DICT_TAG_LIST.indexOf(x) !== -1);
+  if (t === DICT_TAGS.verified) return { kind: 'ok', text: 'Verified in Språkbanken.' };
+  if (t === DICT_TAGS.corrected) return { kind: 'ok', text: 'Corrected using Språkbanken.' };
+  if (t === DICT_TAGS.unverified) return { kind: 'warn', text: 'Not found in Swedish dictionaries. Double-check it.' };
+  return null;
+}
 // One-line summary of the server's Språkbanken dictionary cross-check (data.verify), or ''.
 function verifyNote(v) {
   if (!v || v.status === 'unavailable') return '';
   const src = (v.sources || []).join(', ');
   const lvl = v.level ? ' · level ' + v.level : '';
   if (v.status === 'verified') return 'Verified in Språkbanken (' + src + ')' + lvl + '.';
-  if (v.status === 'corrected') return 'Corrected using Språkbanken (' + src + '): ' + (v.changes || []).join('; ') + '.' + lvl;
+  if (v.status === 'corrected') return 'Corrected using Språkbanken (' + src + '): ' + (v.changes || []).join('; ') + lvl + '.';
   return ((v.warnings || []).join(' ') || 'Not verified in Swedish dictionaries.') + ' Double-check it.';
 }
 async function lookupWord(word) {
@@ -1764,7 +1789,7 @@ async function lookupWord(word) {
     if (isForm) row[SEEN] = JSON.stringify([q.toLowerCase()]);
     pendingRow = row;
     showSearchCard(row, { kind: 'new', label: 'Not in your sheet · AI suggestion' },
-      [isForm ? 'You searched “' + q + '” — this is its dictionary form.' : '', verifyNote(data.verify)].filter(Boolean).join(' '), 'new');
+      isForm ? 'You searched “' + q + '” — this is its dictionary form.' : '', 'new', freshVerify(data.verify));
     setSMsg('');
   } catch (e) {
     if (seq !== lookupSeq) return;
@@ -1890,7 +1915,7 @@ function updateTagFilterOptions(allRows) {
   const sorted = Array.from(tags).sort((a, b) => a.localeCompare(b, 'sv'));
   ['tagFilter', 'deckTag'].forEach(id => {
     const sel = $(id), current = sel.value;
-    sel.innerHTML = '<option value="">All tags</option>' + sorted.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+    sel.innerHTML = '<option value="">All tags</option>' + sorted.map(t => `<option value="${esc(t)}">${esc(DICT_TAG_LABEL[t] || t)}</option>`).join('');
     if (sorted.includes(current)) sel.value = current;
   });
 }
@@ -2014,6 +2039,7 @@ function openEditor(r, word) {
   setMsg('');
   if (r) revealForEdit(r);
   else if (word) $('f_word').value = word;
+  $('verifyBox').innerHTML = r ? verifyLineHtml(dictStatusOf(r)) : '';
   $('addTitle').textContent = r ? 'Edit “' + r[W] + '”' : 'Add a word';
   $('fillBtn').hidden = !apiUrl;
   $('editDialog').showModal();
@@ -2058,11 +2084,13 @@ async function autofill() {
     if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
       $('f_word').value = lemma;
       currentSeenAs = Array.from(new Set(currentSeenAs.concat([word.toLowerCase()])));
-      setMsg(['Saved under its dictionary form “' + lemma + '” — you looked it up as “' + word + '”.', verifyNote(data.verify)].filter(Boolean).join(' '), 'ok');
+      setMsg('Saved under its dictionary form “' + lemma + '” — you looked it up as “' + word + '”.', 'ok');
     } else {
-      setMsg(verifyNote(data.verify), 'ok');
+      setMsg('');
     }
-    try { $('addMsg').scrollIntoView({ block: 'nearest' }); } catch (e) {}
+    // Same line as the cards, right under the Regenerate button; keeps the stored one if the check was unavailable.
+    const fresh = freshVerify(data.verify);
+    if (fresh) $('verifyBox').innerHTML = verifyLineHtml(fresh);
   } catch (e) {
     setMsg('Couldn’t regenerate right now (' + e.message + '). Try again, or edit the fields yourself.', 'err');
   } finally { btn.disabled = false; btn.textContent = 'Regenerate with AI'; }
