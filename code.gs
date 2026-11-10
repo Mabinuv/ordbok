@@ -126,6 +126,99 @@ const LEVEL_GUIDANCE = {
 // save/edit/learn immediately clears the cache so you never see stale data.
 const SEARCH_CACHE_SECONDS = 300;
 
+// ---- LLM cost tracking (an ESTIMATE: token counts x list prices) ----
+// Every LLM call goes through trackLlm_(), which adds its cost to running totals in
+// Script Properties and returns { calls, inTokens, outTokens, costUsd } so the response
+// can carry it. The admin sees the totals in Settings (action `getUsage`, admin-only).
+const MONTHLY_BUDGET_USD = 5;      // shown in Settings as the monthly target (not enforced)
+// USD per 1M tokens: `in` = fresh input, `cached` = cached input, `out` = output (incl. hidden reasoning).
+// Verify against your provider's pricing page and update when you change models.
+const LLM_PRICES = {
+  'gpt-5.4-mini': { in: 0.75, cached: 0.075, out: 4.50 },            // OpenAI model page, Nov 2026
+  'gemini-3.5-flash-lite': { in: 0.30, cached: 0.03, out: 2.50 },    // third-party trackers, NOT Google's page: verify
+};
+const USAGE_KEY = 'LLM_USAGE';
+
+function activeModel_() { return PROVIDER === 'gemini' ? GEMINI_MODEL : OPENAI_MODEL; }
+
+// Token counts from a provider response body.
+function tokensFromBody_(body) {
+  if (PROVIDER === 'gemini') {
+    const u = (body && body.usageMetadata) || {};
+    return { inTokens: Number(u.promptTokenCount) || 0, cachedTokens: Number(u.cachedContentTokenCount) || 0,
+      outTokens: (Number(u.candidatesTokenCount) || 0) + (Number(u.thoughtsTokenCount) || 0) };
+  }
+  const u = (body && body.usage) || {};
+  return { inTokens: Number(u.prompt_tokens) || 0,
+    cachedTokens: Number(u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0,
+    outTokens: Number(u.completion_tokens) || 0 };   // already includes reasoning tokens
+}
+
+// USD for these tokens at the active model's price, or null when the model has no price entry.
+function costUsd_(t) {
+  const p = LLM_PRICES[activeModel_()];
+  if (!p) return null;
+  return ((t.inTokens - t.cachedTokens) * p.in + t.cachedTokens * p.cached + t.outTokens * p.out) / 1e6;
+}
+
+function addUsage_(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return { calls: (a.calls || 0) + (b.calls || 0), inTokens: a.inTokens + b.inTokens, outTokens: a.outTokens + b.outTokens,
+    costUsd: Math.round(((a.costUsd || 0) + (b.costUsd || 0)) * 1e6) / 1e6 };
+}
+
+// Records one successful LLM response and returns its usage. Never throws: tracking must not break a lookup.
+function trackLlm_(action, body) {
+  try {
+    const t = tokensFromBody_(body);
+    const cost = costUsd_(t);
+    const usage = { calls: 1, inTokens: t.inTokens, outTokens: t.outTokens, costUsd: cost == null ? 0 : Math.round(cost * 1e6) / 1e6 };
+    recordUsage_(action, usage, cost == null);
+    return usage;
+  } catch (err) {
+    return null;
+  }
+}
+
+function recordUsage_(action, usage, unpriced) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(3000)) return;   // skip this tick rather than block the user's request
+  try {
+    const p = props_();
+    let st = {};
+    try { st = JSON.parse(p.getProperty(USAGE_KEY) || '{}') || {}; } catch (e) { st = {}; }
+    const now = new Date();
+    const month = Utilities.formatDate(now, 'UTC', 'yyyy-MM');
+    if (!st.since) st.since = Utilities.formatDate(now, 'UTC', 'yyyy-MM-dd');
+    const bump = o => { o.calls = (o.calls || 0) + 1; o.inTokens = (o.inTokens || 0) + usage.inTokens;
+      o.outTokens = (o.outTokens || 0) + usage.outTokens; o.costUsd = Math.round(((o.costUsd || 0) + usage.costUsd) * 1e6) / 1e6; return o; };
+    st.total = bump(st.total || {});
+    st.months = st.months || {};
+    const m = st.months[month] = bump(st.months[month] || {});
+    m.byAction = m.byAction || {};
+    m.byAction[action] = bump(m.byAction[action] || {});
+    if (unpriced) st.unpricedCalls = (st.unpricedCalls || 0) + 1;
+    Object.keys(st.months).sort().slice(0, -24).forEach(k => delete st.months[k]);   // keep 24 months
+    p.setProperty(USAGE_KEY, JSON.stringify(st));
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Admin-only (see doPost): totals for the Settings page.
+function getUsage_() {
+  let st = {};
+  try { st = JSON.parse(props_().getProperty(USAGE_KEY) || '{}') || {}; } catch (e) { st = {}; }
+  const month = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM');
+  const model = activeModel_();
+  return { ok: true, usage: {
+    since: st.since || '', model: model, prices: LLM_PRICES[model] || null, budgetUsd: MONTHLY_BUDGET_USD,
+    monthKey: month, month: (st.months && st.months[month]) || { calls: 0, inTokens: 0, outTokens: 0, costUsd: 0, byAction: {} },
+    total: st.total || { calls: 0, inTokens: 0, outTokens: 0, costUsd: 0 }, unpricedCalls: st.unpricedCalls || 0,
+  } };
+}
+
 // savedEntry (optional) switches on "check mode", used by the client's
 // "Check my words" tool: the model also judges the saved entry and returns
 // "Verdict" ("ok" | "fix") and "Issues" alongside a corrected entry.
@@ -202,11 +295,13 @@ function autofill_(word, sourceSentence, savedEntry) {
   const first = callAutofillLlm_(system, userMessage, key);
   if (!first.ok) return first;
   let fields = finishAutofill_(first.fields, word);
+  let usage = first.usage;
 
   // Cross-check against Språkbanken's dictionaries (fail-open: any problem leaves the AI answer as-is).
   // A second LLM call ("redo") is allowed only for single lookups, never in Check-my-words batch runs.
   const checked = verifyWithDictionaries_(fields, word, !savedEntry, function (evidenceText) {
     const again = callAutofillLlm_(system, userMessage + '\n\n' + evidenceText, key);
+    if (again.ok) usage = addUsage_(usage, again.usage);
     return again.ok ? finishAutofill_(again.fields, word) : null;
   });
   fields = checked.fields;
@@ -215,12 +310,12 @@ function autofill_(word, sourceSentence, savedEntry) {
     fields.Verdict = 'fix';
     fields.Issues = 'Dictionaries (' + verify.sources.join(', ') + ') say: ' + verify.changes.join('; ');
   }
-  return { ok: true, fields: fields, verify: verify };
+  return { ok: true, fields: fields, verify: verify, usage: usage };
 }
 
 // One LLM round trip -> parsed JSON object, or { ok:false, error }.
 function callAutofillLlm_(system, userMessage, key) {
-  let fields;
+  let fields, usage;
   if (PROVIDER === 'gemini') {
     const res = UrlFetchApp.fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', {
@@ -238,6 +333,7 @@ function callAutofillLlm_(system, userMessage, key) {
     if (res.getResponseCode() !== 200) {
       return { ok: false, error: 'Gemini error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
     }
+    usage = trackLlm_('autofill', body);
     fields = JSON.parse(body.candidates[0].content.parts[0].text);
   } else {
     const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
@@ -263,9 +359,10 @@ function callAutofillLlm_(system, userMessage, key) {
     if (res.getResponseCode() !== 200) {
       return { ok: false, error: 'OpenAI error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
     }
+    usage = trackLlm_('autofill', body);
     fields = JSON.parse(body.choices[0].message.content);
   }
-  return { ok: true, fields: fields };
+  return { ok: true, fields: fields, usage: usage };
 }
 
 // Turns the raw model JSON into what the client/sheet expect (Grammar Forms string,
@@ -511,7 +608,7 @@ function generateReading_(words) {
 
   const userMessage = 'Words to review:\n' + list.join(', ');
 
-  let fields;
+  let fields, usage;
   if (PROVIDER === 'gemini') {
     const res = UrlFetchApp.fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', {
@@ -529,6 +626,7 @@ function generateReading_(words) {
     if (res.getResponseCode() !== 200) {
       return { ok: false, error: 'Gemini error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
     }
+    usage = trackLlm_('reading', body);
     fields = JSON.parse(body.candidates[0].content.parts[0].text);
   } else {
     const res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
@@ -549,9 +647,10 @@ function generateReading_(words) {
     if (res.getResponseCode() !== 200) {
       return { ok: false, error: 'OpenAI error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
     }
+    usage = trackLlm_('reading', body);
     fields = JSON.parse(body.choices[0].message.content);
   }
-  return { ok: true, text: String(fields.text || ''), wordsUsed: Array.isArray(fields.wordsUsed) ? fields.wordsUsed : [] };
+  return { ok: true, text: String(fields.text || ''), wordsUsed: Array.isArray(fields.wordsUsed) ? fields.wordsUsed : [], usage: usage };
 }
 
 /**
@@ -590,6 +689,7 @@ function generatePassage_(words, level, theme, length, count) {
   const lenCfg = passageLength_(length);
   const want = Math.max(4, Math.min(list.length, parseInt(count, 10) || list.length));
 
+  let usage = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     // callPassageProvider_ can throw (e.g. JSON.parse on a malformed/
     // truncated model response) rather than returning { ok: false, ... } —
@@ -602,10 +702,11 @@ function generatePassage_(words, level, theme, length, count) {
       if (attempt === 1) return { ok: false, error: 'Generated passage failed validation twice: malformed response (' + e + ')' };
       continue;
     }
+    usage = addUsage_(usage, result.usage);
     if (!result.ok) return result;   // hard provider/network error — no point retrying
     const validated = validatePassage_(result.parsed, list);
-    if (validated.ok) return { ok: true, data: validated.data };
-    if (attempt === 1) return { ok: false, error: 'Generated passage failed validation twice: ' + validated.reason };
+    if (validated.ok) return { ok: true, data: validated.data, usage: usage };
+    if (attempt === 1) return { ok: false, error: 'Generated passage failed validation twice: ' + validated.reason, usage: usage };
   }
 }
 
@@ -724,7 +825,8 @@ function callPassageProvider_(key, list, level, topic, lenCfg, want) {
     if (res.getResponseCode() !== 200) {
       return { ok: false, error: 'Gemini error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
     }
-    return { ok: true, parsed: JSON.parse(body.candidates[0].content.parts[0].text) };
+    const usage = trackLlm_('passage', body);
+    return { ok: true, parsed: JSON.parse(body.candidates[0].content.parts[0].text), usage: usage };
   }
 
   // OpenAI strict json_schema mode requires additionalProperties:false and
@@ -783,7 +885,8 @@ function callPassageProvider_(key, list, level, topic, lenCfg, want) {
   if (res.getResponseCode() !== 200) {
     return { ok: false, error: 'OpenAI error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
   }
-  return { ok: true, parsed: JSON.parse(body.choices[0].message.content) };
+  const usage = trackLlm_('passage', body);
+  return { ok: true, parsed: JSON.parse(body.choices[0].message.content), usage: usage };
 }
 
 /**
@@ -901,7 +1004,7 @@ function checkWriting_(items, level) {
     '\'Idag jag går\' → \'Idag går jag\'"); "tip": one short encouraging English tip or note about what to practise. ' +
     'Return the items in the same order.';
   const user = JSON.stringify(list.map((x, i) => ({ n: i + 1, question: x.question, answer: x.answer })));
-  let parsed;
+  let parsed, usage;
   if (PROVIDER === 'gemini') {
     const S = { type: 'STRING' };
     const schema = { type: 'OBJECT', properties: { results: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
@@ -916,6 +1019,7 @@ function checkWriting_(items, level) {
     });
     const body = JSON.parse(res.getContentText());
     if (res.getResponseCode() !== 200) return { ok: false, error: 'Gemini error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
+    usage = trackLlm_('writing', body);
     parsed = JSON.parse(body.candidates[0].content.parts[0].text);
   } else {
     const str = { type: 'string' };
@@ -933,6 +1037,7 @@ function checkWriting_(items, level) {
     });
     const body = JSON.parse(res.getContentText());
     if (res.getResponseCode() !== 200) return { ok: false, error: 'OpenAI error ' + res.getResponseCode() + ': ' + ((body.error && body.error.message) || 'unknown') };
+    usage = trackLlm_('writing', body);
     parsed = JSON.parse(body.choices[0].message.content);
   }
   const out = (parsed && Array.isArray(parsed.results) ? parsed.results : []).slice(0, list.length).map(r => ({
@@ -941,7 +1046,7 @@ function checkWriting_(items, level) {
     tip: String((r && r.tip) || '').trim(),
   }));
   if (out.length !== list.length) return { ok: false, error: 'The checker returned an incomplete result. Try again.' };
-  return { ok: true, results: out };
+  return { ok: true, results: out, usage: usage };
 }
 
 /**
@@ -1518,10 +1623,14 @@ function doPost(e) {
         const capErr = takeWritingBudget_(lock);
         if (capErr) return json_({ ok: false, error: capErr });
       }
-      return json_(checkWriting_(data.answers, data.level));
+      const cw = checkWriting_(data.answers, data.level);
+      if (!isAdmin_(data)) delete cw.usage;   // spend is admin-only info
+      return json_(cw);
     }
     const authErr = adminAuthError_(data);
     if (authErr) return json_({ ok: false, error: authErr });
+
+    if (data.action === 'getUsage') return json_(getUsage_());
 
     if (data.action === 'autofill') {
       const savedEntry = data.savedEntry && typeof data.savedEntry === 'object' ? data.savedEntry : null;
@@ -1588,7 +1697,7 @@ function doPost(e) {
       const pmap = headerMap_(psh);
       appendPassageRow_(psh, pmap, passage);
       invalidatePassagesCache_();
-      return json_({ ok: true, passage: passage });
+      return json_({ ok: true, passage: passage, usage: result.usage || null });
     }
 
     // Same lock-just-for-this-step pattern as importPassage/generatePassage

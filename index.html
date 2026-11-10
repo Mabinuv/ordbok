@@ -158,6 +158,9 @@ applyTheme(store.get('ordbok_theme', ''));
   .tab:hover { color: var(--ink); }
   .tab[aria-current="page"] { color: var(--lake); background: color-mix(in srgb, var(--lake) 10%, transparent); }
   .sub { color: var(--muted); margin: 4px 0 0; }
+  .usage-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 8px 0 2px; }
+  .usage-bar span { display: block; height: 100%; width: 0; background: var(--lake); }
+  .usage-bar.warn span { background: var(--c-adj); }
   .mode { font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .pill { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
   .pill.live { color: var(--ok); border-color: var(--ok); }
@@ -736,6 +739,14 @@ applyTheme(store.get('ordbok_theme', ''));
     <h3 style="margin:18px 0 6px;font-size:16px">Install on your phone</h3>
     <p class="sub" id="installNote"></p>
     <button class="link" id="installBtn" type="button" hidden>⬇ Install MJ Ordbok</button>
+  </div>
+  <div id="usageBox" hidden>
+    <h3 style="margin:18px 0 6px;font-size:16px">AI usage <small>(estimate)</small></h3>
+    <p class="sub" id="usageMonth"></p>
+    <div class="usage-bar" id="usageBar" role="progressbar" aria-label="Share of the monthly AI budget used" aria-valuemin="0" aria-valuemax="100"><span id="usageFill"></span></div>
+    <p class="sub" id="usageTotal"></p>
+    <p class="sub" id="usageSplit"></p>
+    <p class="sub" id="usageNote"></p>
   </div>
   <h3 style="margin:18px 0 6px;font-size:16px">Voice</h3>
   <label for="setVoice">Swedish voice for every Listen button</label>
@@ -1626,6 +1637,35 @@ function renderModePill() {
   $('adminNote').textContent = learner ? '' : isAdmin() ? 'You are signed in as admin: you can add words and generate passages.' : '';
   $('checkBtn').hidden = !apiUrl || learner;   // the check needs the AI backend (admin only)
   refreshModelInfo();
+  if ($('settings').open) refreshUsage();       // e.g. right after signing in from Settings
+}
+// ---- AI usage / estimated cost (admin only; the server tracks every LLM call, see trackLlm_ in code.gs) ----
+const USAGE_LABELS = { autofill: 'Word lookups', reading: 'Reading', passage: 'Passages', writing: 'Writing checks' };
+const fmtUsd = c => '$' + (c > 0 && c < 0.01 ? c.toFixed(4) : c.toFixed(2));
+async function refreshUsage() {
+  const box = $('usageBox');
+  box.hidden = !(apiUrl && isAdmin());
+  if (box.hidden) return;
+  const set = (id, t) => { $(id).textContent = t; };
+  try {
+    const u = (await post({ action: 'getUsage' })).usage;
+    const m = u.month, t = u.total, budget = Number(u.budgetUsd) || 0;
+    const pct = budget > 0 ? Math.round(m.costUsd / budget * 100) : 0;
+    set('usageMonth', 'This month: ' + fmtUsd(m.costUsd) + (budget ? ' of ' + fmtUsd(budget) + ' (' + pct + '%)' : '') + ' · ' + m.calls + ' call' + (m.calls === 1 ? '' : 's'));
+    $('usageFill').style.width = Math.min(100, pct) + '%';
+    $('usageBar').classList.toggle('warn', pct >= 80);
+    $('usageBar').setAttribute('aria-valuenow', String(Math.min(100, pct)));
+    set('usageTotal', 'All time' + (u.since ? ' (since ' + u.since + ')' : '') + ': ' + fmtUsd(t.costUsd) + ' · ' + t.calls + ' calls' +
+      (t.calls ? ' · about ' + fmtUsd(t.costUsd / t.calls) + ' per call' : ''));
+    set('usageSplit', Object.keys(m.byAction || {}).map(k => (USAGE_LABELS[k] || k) + ' ' + fmtUsd(m.byAction[k].costUsd) + ' (' + m.byAction[k].calls + ')').join(' · '));
+    set('usageNote', u.prices
+      ? 'Estimated from token counts × list prices (' + u.model + ': $' + Number(u.prices.in).toFixed(2) + ' in / $' + Number(u.prices.out).toFixed(2) + ' out per 1M tokens). Your provider’s billing page is the source of truth.'
+      : 'No price on file for ' + u.model + ': calls are counted but cost shows $0.00. Add it to LLM_PRICES in code.gs.');
+  } catch (e) {
+    ['usageMonth', 'usageTotal', 'usageSplit'].forEach(id => set(id, ''));
+    $('usageFill').style.width = '0';
+    set('usageNote', 'Usage isn’t available yet. Paste the latest code.gs into Apps Script and redeploy a new version to turn it on.');
+  }
 }
 async function refreshModelInfo() {
   const el = $('settingsStatus');
@@ -3876,6 +3916,7 @@ $('settingsMenuBtn').addEventListener('click', () => {
   fillVoiceSelects();
   $('setRate').value = String(speechRate()); $('setPause').value = speechPauseMode();
   $('settings').showModal();
+  refreshUsage();
 });
 $('setVoice').addEventListener('change', e => { store.set('ordbok_voice', e.target.value); fillVoiceSelects(); speechSay('Hej! Så här låter jag.'); });
 $('setRate').addEventListener('change', e => store.set('ordbok_speech_rate', e.target.value));
