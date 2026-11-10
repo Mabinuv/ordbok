@@ -1680,6 +1680,15 @@ function notRecognised(f) {
   return f.Recognised === false || String(f.Recognised).toLowerCase() === 'false' ||
     /^not recognised as swedish/i.test(String(f['English Meaning'] || ''));
 }
+// One-line summary of the server's Språkbanken dictionary cross-check (data.verify), or ''.
+function verifyNote(v) {
+  if (!v || v.status === 'unavailable') return '';
+  const src = (v.sources || []).join(', ');
+  const lvl = v.level ? ' · level ' + v.level : '';
+  if (v.status === 'verified') return 'Verified in Språkbanken (' + src + ')' + lvl + '.';
+  if (v.status === 'corrected') return 'Corrected using Språkbanken (' + src + '): ' + (v.changes || []).join('; ') + '.' + lvl;
+  return ((v.warnings || []).join(' ') || 'Not verified in Swedish dictionaries.') + ' Double-check it.';
+}
 async function lookupWord(word) {
   if (word != null) $('sq').value = word;
   const q = $('sq').value.trim();
@@ -1740,7 +1749,7 @@ async function lookupWord(word) {
     if (isForm) row[SEEN] = JSON.stringify([q.toLowerCase()]);
     pendingRow = row;
     showSearchCard(row, { kind: 'new', label: 'Not in your sheet · AI suggestion' },
-      isForm ? 'You searched “' + q + '” — this is its dictionary form.' : '', 'new');
+      [isForm ? 'You searched “' + q + '” — this is its dictionary form.' : '', verifyNote(data.verify)].filter(Boolean).join(' '), 'new');
     setSMsg('');
   } catch (e) {
     if (seq !== lookupSeq) return;
@@ -2032,9 +2041,9 @@ async function autofill() {
     if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
       $('f_word').value = lemma;
       currentSeenAs = Array.from(new Set(currentSeenAs.concat([word.toLowerCase()])));
-      setMsg('Saved under its dictionary form “' + lemma + '” — you looked it up as “' + word + '”.', 'ok');
+      setMsg(['Saved under its dictionary form “' + lemma + '” — you looked it up as “' + word + '”.', verifyNote(data.verify)].filter(Boolean).join(' '), 'ok');
     } else {
-      setMsg('');
+      setMsg(verifyNote(data.verify), 'ok');
     }
   } catch (e) {
     setMsg('Couldn’t regenerate right now (' + e.message + '). Try again, or edit the fields yourself.', 'err');

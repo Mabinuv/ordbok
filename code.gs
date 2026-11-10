@@ -199,6 +199,27 @@ function autofill_(word, sourceSentence, savedEntry) {
     : word;
   if (savedEntry) userMessage += '\n\nSaved entry:\n' + JSON.stringify(savedEntry);
 
+  const first = callAutofillLlm_(system, userMessage, key);
+  if (!first.ok) return first;
+  let fields = finishAutofill_(first.fields, word);
+
+  // Cross-check against Språkbanken's dictionaries (fail-open: any problem leaves the AI answer as-is).
+  // A second LLM call ("redo") is allowed only for single lookups, never in Check-my-words batch runs.
+  const checked = verifyWithDictionaries_(fields, word, !savedEntry, function (evidenceText) {
+    const again = callAutofillLlm_(system, userMessage + '\n\n' + evidenceText, key);
+    return again.ok ? finishAutofill_(again.fields, word) : null;
+  });
+  fields = checked.fields;
+  const verify = checked.verify;
+  if (savedEntry && verify.status === 'corrected' && String(savedEntry['Part of Speech'] || '') !== String(fields['Part of Speech'] || '')) {
+    fields.Verdict = 'fix';
+    fields.Issues = 'Dictionaries (' + verify.sources.join(', ') + ') say: ' + verify.changes.join('; ');
+  }
+  return { ok: true, fields: fields, verify: verify };
+}
+
+// One LLM round trip -> parsed JSON object, or { ok:false, error }.
+function callAutofillLlm_(system, userMessage, key) {
   let fields;
   if (PROVIDER === 'gemini') {
     const res = UrlFetchApp.fetch(
@@ -244,6 +265,12 @@ function autofill_(word, sourceSentence, savedEntry) {
     }
     fields = JSON.parse(body.choices[0].message.content);
   }
+  return { ok: true, fields: fields };
+}
+
+// Turns the raw model JSON into what the client/sheet expect (Grammar Forms string,
+// Gender folded into Part of Speech, clean Synonyms/Antonyms). Safe to run on a redo too.
+function finishAutofill_(fields, word) {
   // Forms travels to the client as a JSON string, same shape it's stored in the sheet.
   if (fields && Array.isArray(fields.Forms)) {
     fields['Grammar Forms'] = JSON.stringify(fields.Forms);
@@ -262,7 +289,188 @@ function autofill_(word, sourceSentence, savedEntry) {
   const headword = String(fields['Dictionary Form'] || word || '').toLowerCase().trim();
   fields.Synonyms = cleanWordList_(fields.Synonyms, headword, 4);
   fields.Antonyms = cleanWordList_(fields.Antonyms, headword, 3);
-  return { ok: true, fields: fields };
+  return fields;
+}
+
+// ---------------------------------------------------------------------------
+// Språkbanken Karp-S dictionary cross-check (https://ws.spraakbanken.gu.se/docs/karp-s)
+// Open, key-less, read-only API. Lexicons hold lemmas only, so we look up the
+// model's "Dictionary Form". One query per resource: each has its own entry-word
+// field, and a multi-resource query silently drops resources lacking that field.
+// ---------------------------------------------------------------------------
+const KARP_SEARCH_URL = 'https://spraakbanken4.it.gu.se/karps/v1/search';
+const KARP_CACHE_SECONDS = 21600;   // 6 h; misses are cached too
+const KARP_RESOURCES = [
+  { id: 'so2009-ord',      label: 'SO',      field: 'normaliserat_ord' },
+  { id: 'saol14-faksimil', label: 'SAOL 14', field: 'normaliserat_ord' },
+  { id: 'kelly',           label: 'Kelly',   field: 'baseform' },
+  { id: 'sen-lex',         label: 'SenLex',  field: 'entry_word' },
+];
+const SENLEX_UPOS = { noun: 'NOUN', verb: 'VERB', adjective: 'ADJ', adverb: 'ADV', preposition: 'ADP', pronoun: 'PRON',
+  conjunction: 'CCONJ', interjection: 'INTJ', numeral: 'NUM' };
+const POS_TO_UPOS = { noun: 'NOUN', verb: 'VERB', adjective: 'ADJ', adverb: 'ADV', pronoun: 'PRON', preposition: 'ADP',
+  conjunction: 'CCONJ', interjection: 'INTJ', numeral: 'NUM' };
+
+// Raw Karp entry -> { upos, gender ('en'|'ett'|''), cefr }
+function karpNormalize_(resId, e) {
+  const n = { upos: String(e.upos || '').toUpperCase(), gender: '', cefr: '' };
+  if (resId === 'kelly') {
+    if (e.gram === 'en' || e.gram === 'ett') n.gender = e.gram;
+  } else if (resId === 'sen-lex') {
+    n.upos = SENLEX_UPOS[String(e.POS || '').toLowerCase().split(/[\s(]/)[0]] || '';
+    if (/^common/i.test(String(e.Gender || ''))) n.gender = 'en';
+    else if (/^neuter/i.test(String(e.Gender || ''))) n.gender = 'ett';
+    n.cefr = String(e.CEFR || '');
+  }
+  return n;
+}
+
+// -> [{ label, id, found, error, entries:[normalized] }] in KARP_RESOURCES order, or null for an unusable lemma.
+function karpLookup_(lemma) {
+  lemma = String(lemma || '').toLowerCase().trim();
+  if (!lemma || lemma.length > 60 || /["\\|]/.test(lemma)) return null;
+  const cache = CacheService.getScriptCache();
+  const out = KARP_RESOURCES.map(r => ({ label: r.label, id: r.id, found: false, error: false, entries: [] }));
+  const reqs = [], idx = [];
+  KARP_RESOURCES.forEach((r, i) => {
+    const cached = cache.get('karp1:' + r.id + ':' + lemma);
+    if (cached !== null) {
+      out[i].entries = JSON.parse(cached);
+      out[i].found = out[i].entries.length > 0;
+    } else {
+      reqs.push({
+        url: KARP_SEARCH_URL + '?resources=' + encodeURIComponent(r.id) + '&size=10&q=' +
+          encodeURIComponent('equals|' + r.field + '|"' + lemma + '"'),
+        muteHttpExceptions: true,
+      });
+      idx.push(i);
+    }
+  });
+  if (reqs.length) {
+    let resps = null;
+    try { resps = UrlFetchApp.fetchAll(reqs); } catch (err) { resps = null; }
+    idx.forEach((i, k) => {
+      try {
+        if (!resps || resps[k].getResponseCode() !== 200) { out[i].error = true; return; }
+        const hits = (JSON.parse(resps[k].getContentText()).hits || []);
+        out[i].entries = hits.map(h => karpNormalize_(KARP_RESOURCES[i].id, h.entry || {}));
+        out[i].found = out[i].entries.length > 0;
+        cache.put('karp1:' + KARP_RESOURCES[i].id + ':' + lemma, JSON.stringify(out[i].entries), KARP_CACHE_SECONDS);
+      } catch (err) { out[i].error = true; }
+    });
+  }
+  return out;
+}
+
+function llmRecognised_(fields) {
+  return fields.Recognised !== false && !/^not recognised as swedish/i.test(String(fields['English Meaning'] || ''));
+}
+
+function uposClass_(u) {
+  u = String(u || '').toUpperCase();
+  if (u === 'AUX') return 'VERB';
+  if (u === 'SCONJ') return 'CCONJ';
+  if (u === 'PROPN') return 'NOUN';
+  if (u === 'DET') return 'PRON';
+  return u;
+}
+
+// Conflicts between the model's entry and what the dictionaries found.
+// -> [{ type:'recognised' } | { type:'pos', want:[upos…] } | { type:'gender', want:'en'|'ett' }]
+function karpConflicts_(fields, results) {
+  const found = results.filter(r => r.found);
+  if (!found.length) return [];
+  const conflicts = [];
+  if (!llmRecognised_(fields)) return [{ type: 'recognised' }];
+  const pos = String(fields['Part of Speech'] || '').toLowerCase();
+  const llmUpos = POS_TO_UPOS[pos.split(/[\s(]/)[0]] || '';
+  const dictUpos = {};
+  const genders = {};
+  found.forEach(r => r.entries.forEach(e => {
+    if (e.upos && e.upos !== 'X') dictUpos[uposClass_(e.upos)] = true;
+    if (e.gender) genders[e.gender] = true;
+  }));
+  const uposList = Object.keys(dictUpos);
+  if (llmUpos && uposList.length && !dictUpos[uposClass_(llmUpos)]) conflicts.push({ type: 'pos', want: uposList });
+  const m = pos.match(/^noun \((en|ett)\)$/);
+  const gList = Object.keys(genders);
+  if (m && gList.length === 1 && gList[0] !== m[1]) conflicts.push({ type: 'gender', want: gList[0] });
+  return conflicts;
+}
+
+function karpEvidenceText_(lemma, results, conflicts) {
+  const lines = ['Dictionary check (Språkbanken: SO, SAOL 14, Kelly, SenLex) for the lemma "' + lemma + '":'];
+  results.forEach(r => {
+    if (r.error) return;
+    if (!r.found) { lines.push('- ' + r.label + ': no entry'); return; }
+    const bits = r.entries.map(e => [e.upos, e.gender, e.cefr].filter(Boolean).join('/')).filter(Boolean);
+    lines.push('- ' + r.label + ': entry found' + (bits.length ? ' (' + bits.join('; ') + ')' : ''));
+  });
+  conflicts.forEach(c => {
+    if (c.type === 'recognised') lines.push('Your answer said this is NOT a Swedish word, but the dictionaries list it. Re-answer for the dictionary entry.');
+    if (c.type === 'pos') lines.push('Your part of speech disagrees with the dictionaries, which list: ' + c.want.join(', ') + '.');
+    if (c.type === 'gender') lines.push('The dictionaries give this noun the gender "' + c.want + '", not what you answered. Make Gender, Part of Speech and every noun Form consistent with "' + c.want + '".');
+  });
+  lines.push('Return the complete JSON again. Change your answer only where the dictionaries are right; keep it otherwise.');
+  return lines.join('\n');
+}
+
+// -> { fields, verify:{ status:'verified'|'corrected'|'unverified'|'unavailable', sources:[], changes:[], warnings:[] } }
+function verifyWithDictionaries_(fields, word, canRedo, redo) {
+  const verify = { status: 'unavailable', sources: [], changes: [], warnings: [] };
+  try {
+    const typed = String(word || '').toLowerCase().trim();
+    const lemmaOf = f => llmRecognised_(f) ? (String(f['Dictionary Form'] || typed).toLowerCase().trim()) : typed;
+    let lemma = lemmaOf(fields);
+    let results = karpLookup_(lemma);
+    if (!results || results.every(r => r.error)) return { fields: fields, verify: verify };
+    let conflicts = karpConflicts_(fields, results);
+
+    if (conflicts.length && canRedo) {
+      const redone = redo(karpEvidenceText_(lemma, results, conflicts));
+      if (redone) {
+        const before = fields;
+        fields = redone;
+        ['Part of Speech', 'Dictionary Form'].forEach(k => {
+          if (String(before[k] || '') !== String(fields[k] || '')) verify.changes.push(k.toLowerCase() + ': ' + (before[k] || '—') + ' → ' + (fields[k] || '—'));
+        });
+        if (!llmRecognised_(before) && llmRecognised_(fields)) verify.changes.push('now recognised as a Swedish word');
+        lemma = lemmaOf(fields);
+        results = karpLookup_(lemma) || results;
+        conflicts = karpConflicts_(fields, results);
+      }
+    }
+
+    // Anything still disagreeing: the dictionary wins on en/ett (a single clear signal); POS is only flagged.
+    conflicts.forEach(c => {
+      if (c.type === 'gender') {
+        const old = fields['Part of Speech'];
+        fields['Part of Speech'] = 'noun (' + c.want + ')';
+        verify.changes.push('part of speech: ' + old + ' → ' + fields['Part of Speech'] + ' (check the noun forms)');
+      } else if (c.type === 'pos') {
+        verify.warnings.push('Dictionaries list it as ' + c.want.join('/').toLowerCase() + '.');
+      } else if (c.type === 'recognised') {
+        verify.warnings.push('Found in the dictionaries although the AI did not recognise it.');
+      }
+    });
+
+    const found = results.filter(r => r.found);
+    verify.sources = found.map(r => r.label);
+    if (!found.length) {
+      verify.status = 'unverified';
+      verify.warnings.push('Not found in Swedish dictionaries.');
+    } else if (verify.warnings.length) {
+      verify.status = 'unverified';
+    } else {
+      verify.status = verify.changes.length ? 'corrected' : 'verified';
+    }
+    const cefr = [];
+    found.forEach(r => r.entries.forEach(e => { if (e.cefr && cefr.indexOf(e.cefr) === -1) cefr.push(e.cefr); }));
+    if (cefr.length) verify.level = cefr.sort()[0];
+  } catch (err) {
+    verify.status = 'unavailable';
+  }
+  return { fields: fields, verify: verify };
 }
 
 // AI word list (array, or comma-separated string) -> "a, b, c": lowercase, trimmed,
